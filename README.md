@@ -1,4 +1,4 @@
-# 🌐 WAFcontrol - Cloudflare WAF Rule Management
+# 🌐 WAFcontrol (Cloudflare WAF Settings Automation)
 
 Welcome to **WAFcontrol**, a powerful, scalable, and fully automated solution for managing Cloudflare Web Application Firewall (WAF) rules across multiple zones. This tool allows you to define default configurations and customize WAF settings for individual domains, all while leveraging Cloudflare’s robust API to enhance your security posture.
 
