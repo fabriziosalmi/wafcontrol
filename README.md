@@ -91,7 +91,7 @@ cd wafcontrol
 Run the script manually for testing:
 
 ```bash
-python manage_waf.py --config config/waf.yaml
+python scripts/cloudflare_apply.py --config config/cloudflare.yaml
 ```
 
 ### 5. Automating with GitHub Actions
