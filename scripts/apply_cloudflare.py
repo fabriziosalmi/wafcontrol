@@ -103,18 +103,6 @@ class CloudflareAPI:
             logging.error(f"Token validation failed: {e}")
             return False
 
-    def get_existing_rules(self, zone_id: str) -> List[Dict[str, Any]]:
-        """Get existing firewall rules for a zone"""
-        url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/firewall/rules"
-        try:
-            response = self.make_request("GET", url)
-            if response.get('success'):
-                return response.get('result', [])
-            return []
-        except Exception as e:
-            logging.error(f"Failed to get existing rules: {e}")
-            return []
-
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def apply_waf_settings(api: CloudflareAPI, zone_id: str, settings: WAFSettings) -> Dict[str, Any]:
@@ -140,40 +128,46 @@ def apply_waf_settings(api: CloudflareAPI, zone_id: str, settings: WAFSettings) 
     # Handle Custom Rules
     if settings.custom_rules:
         try:
-            # Get existing rules
-            existing_rules = api.get_existing_rules(zone_id)
+            # Create filter and rules combination
+            filters_url = f"{base_url}/filters"
+            rules_url = f"{base_url}/firewall/rules"
             
-            # Delete existing rules if any
-            for rule in existing_rules:
-                delete_url = f"{base_url}/firewall/rules/{rule['id']}"
-                api.make_request("DELETE", delete_url)
-                logging.info(f"Deleted existing rule: {rule.get('description', 'unnamed rule')}")
-
             # Ensure we don't exceed the free plan limit
             rules_to_create = settings.custom_rules[:5]
             if len(settings.custom_rules) > 5:
                 logging.warning("More than 5 rules provided. Only the first 5 will be created (free plan limit).")
 
-            # Create new rules
-            if rules_to_create:
-                rules_url = f"{base_url}/firewall/rules"
-                rules_data = []
-                
-                for rule in rules_to_create:
-                    rule_data = {
-                        "description": rule.description or rule.name,
+            # Create rules one by one to avoid potential issues
+            for rule in rules_to_create:
+                try:
+                    # Create filter first
+                    filter_data = {
                         "expression": rule.expression,
-                        "action": rule.action,
-                        "enabled": True
+                        "description": f"Filter for {rule.name}"
                     }
-                    rules_data.append(rule_data)
-
-                result = api.make_request("POST", rules_url, {"rules": rules_data})
-                if result.get('success'):
-                    updated_settings["custom_rules"] = result
-                    logging.info(f"Successfully created {len(rules_data)} WAF rules")
-                else:
-                    logging.error(f"Failed to create WAF rules: {result.get('errors', [])}")
+                    filter_result = api.make_request("POST", filters_url, filter_data)
+                    
+                    if filter_result.get('success') and filter_result.get('result'):
+                        filter_id = filter_result['result']['id']
+                        
+                        # Create rule using the filter
+                        rule_data = {
+                            "filter": {"id": filter_id},
+                            "action": rule.action,
+                            "description": rule.description or rule.name,
+                            "enabled": True,
+                            "ref": rule.name
+                        }
+                        
+                        rule_result = api.make_request("POST", rules_url, rule_data)
+                        if rule_result.get('success'):
+                            logging.info(f"Successfully created rule: {rule.name}")
+                        else:
+                            logging.error(f"Failed to create rule {rule.name}: {rule_result.get('errors', [])}")
+                    
+                except Exception as e:
+                    logging.error(f"Failed to create rule {rule.name}: {e}")
+                    continue
 
         except Exception as e:
             logging.error(f"Failed to manage WAF rules: {e}")
