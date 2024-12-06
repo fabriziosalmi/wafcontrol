@@ -3,98 +3,52 @@ cloudflare:
     - name: "trusted_partners"
       description: "List of trusted partner IP addresses"
       ips:
-        - "203.0.113.0/24"  # Allow traffic from trusted partners
+        - "203.0.113.0/24"
         - "198.51.100.12"
-
     - name: "suspicious_ips"
       description: "List of known suspicious IP addresses"
       ips:
-        - "192.0.2.0/24"  # Block traffic from suspicious IP range
+        - "192.0.2.0/24"
         - "198.51.100.45"
-
     - name: "internal_network"
       description: "List of internal IPs for company use"
       ips:
         - "10.0.0.0/8"
         - "172.16.0.0/12"
-
   waf:
     default:
-      enable_waf: true
-      managed_rules:
-        - id: "100015"  # Example: Basic OWASP core ruleset ID available in the free plan
-          action: "block"
-          description: "Apply basic OWASP ruleset to all zones"
-
       custom_rules:
         - name: "Block Suspicious IPs"
-          expression: "(ip.src in $suspicious_ips)"  # Referencing the IP list
+          expression: "(ip.src in $suspicious_ips)"
           action: "block"
           description: "Block requests from a suspicious IP list"
-
         - name: "Challenge High-Risk Countries"
-          expression: "(ip.geoip.country in {'CN', 'RU'})"
+          expression: "(ip.geoip.country in {'CN' 'RU'})"
           action: "challenge"
           description: "Challenge traffic from high-risk countries"
-
-        - name: "Allow Good Bots Only"
+        - name: "Allow Good Bots"
           expression: "(cf.client.bot and http.user_agent contains 'Googlebot')"
           action: "allow"
           description: "Allow access only for recognized good bots like Googlebot"
-
+        - name: "Block Bad Bots"
+          expression: "(http.user_agent contains 'BadBot')"
+          action: "block"
+          description: "Block requests from known bad bots"
       firewall_settings:
-        sensitivity: "medium"  # Sensitivity level: low, medium, high
-        bot_fight_mode: true  # Enable Bot Fight Mode (available in the free plan)
-
-        ip_access_rules:
-          - action: "allow"
-            value: "$trusted_partners"  # Allow traffic from the trusted partners IP list
-            description: "Allow traffic from trusted partner IP addresses"
-
-          - action: "block"
-            value: "$suspicious_ips"  # Block traffic from suspicious IP list
-            description: "Block suspicious IP addresses to prevent malicious activity"
-
-        user_agent_rules:
-          - action: "block"
-            value: "BadBot"  # Block specific user agent string
-            description: "Block known malicious user agent"
-
-        security_level: "high"  # Options: off, essentially_off, low, medium, high, under_attack
-        challenge_ttl: 3600  # Time to live for challenge (in seconds)
-        privacy_pass_support: true  # Allow users with a Privacy Pass to bypass challenge
+        security_level: "high"
 
     zones:
-      - id: "b441db6e139659910adc1155990213e2"
-        domain: "freesubnet.com"
-        # This zone inherits WAF settings from default except those explicitly defined here
+      - id: "b441db6e139659910adc1155990213e2"  # Replace with your zone ID
+        domain: "freesubnet.com"   # Replace with your domain
         waf:
-          managed_rules:
-            - id: "100015"
-              action: "challenge"
-              description: "Challenge instead of block for OWASP ruleset for example.com"
-
           custom_rules:
-            - name: "Block Bad Bots"
-              expression: "(http.user_agent contains 'BadBot')"
-              action: "block"
-              description: "Block requests from a known malicious bot"
-
+            - name: "Allow Internal Network"
+              expression: "(ip.src in $internal_network)"
+              action: "allow"
+              description: "Allow access from internal company IP range"
+            - name: "Allow Trusted Partners"
+              expression: "(ip.src in $trusted_partners)"
+              action: "allow"
+              description: "Allow access from trusted partners"
           firewall_settings:
-            sensitivity: "high"  # Custom WAF sensitivity for this zone
-            ip_access_rules:
-              - action: "allow"
-                value: "$internal_network"  # Allow internal company network IPs
-                description: "Allow access from internal company IP range"
-
-            user_agent_rules:
-              - action: "challenge"
-                value: "UnknownBot"
-                description: "Challenge requests from a suspicious user agent"
-
-            security_level: "under_attack"  # Set higher security level during an attack
-
-#      - id: "0987654321fedcba0987654321fedcba"
-#        domain: "anotherdomain.com"
-#        # This zone inherits all WAF settings from default
-#        waf: {}
+            security_level: "under_attack"
