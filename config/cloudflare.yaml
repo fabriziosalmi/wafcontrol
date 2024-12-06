@@ -3,9 +3,27 @@ cloudflare:
     default:
       firewall_settings:
         security_level: "high"
+      custom_rules:
+        - name: "Block Bad Bots"
+          expression: "(http.user_agent contains 'BadBot')"
+          action: "block"
+          description: "Block known bad bot user agents"
+        - name: "Challenge High Risk Countries"
+          expression: "(ip.geoip.country in {'CN' 'RU' 'NK'})"
+          action: "challenge"
+          description: "Challenge requests from high-risk countries"
     zones:
-      - id: "b441db6e139659910adc1155990213e2"  # Your zone ID
-        domain: "freesubnet.com"                 # Your domain
+      - id: "b441db6e139659910adc1155990213e2"
+        domain: "freesubnet.com"
         waf:
           firewall_settings:
-            security_level: "medium"
+            security_level: "under_attack"
+          custom_rules:
+            - name: "Allow Internal IPs"
+              expression: "(ip.src in {\"10.0.0.0/8\" \"172.16.0.0/12\" \"192.168.0.0/16\"})"
+              action: "allow"
+              description: "Allow internal network ranges"
+            - name: "Block SQL Injection"
+              expression: "(http.request.uri.path contains 'union' or http.request.uri.path contains 'select')"
+              action: "block"
+              description: "Block basic SQL injection attempts"
