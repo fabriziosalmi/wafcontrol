@@ -5,7 +5,7 @@ import logging
 import yaml
 import requests
 from typing import List, Dict, Optional, Any
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator, ValidationError
 from tenacity import retry, stop_after_attempt, wait_exponential
 import argparse
 
@@ -26,8 +26,9 @@ class WAFRule(BaseModel):
     action: str
     description: Optional[str] = None
 
-    @validator('action')
-    def validate_rule_action(cls, value):
+    @field_validator('action')
+    @classmethod
+    def validate_rule_action(cls, value: str) -> str:
         if value not in {"block", "challenge", "allow"}:
             raise ValueError("Invalid action. Choose one of 'block', 'challenge', 'allow'.")
         return value
@@ -41,8 +42,9 @@ class CloudflareWAFSettings(BaseModel):
     user_agent_rules: Optional[List[str]] = []
     custom_rules: Optional[List[WAFRule]] = []
 
-    @validator("sensitivity")
-    def validate_sensitivity(cls, value):
+    @field_validator("sensitivity")
+    @classmethod
+    def validate_sensitivity(cls, value: str) -> str:
         if value not in {"low", "medium", "high"}:
             raise ValueError("Invalid sensitivity level. Choose one of 'low', 'medium', 'high'.")
         return value
@@ -51,7 +53,7 @@ class CloudflareWAFSettings(BaseModel):
 # Config class to hold all zones
 class Config(BaseModel):
     ip_lists: Dict[str, List[str]] = {}
-    waf: Dict[str, Any]
+    waf: Dict[str, Dict[str, Any]]
 
 
 # Function to validate the API token by calling the Cloudflare API
@@ -63,7 +65,7 @@ def validate_api_token(api_token: str) -> bool:
     }
 
     try:
-        response = requests.get(url, headers=headers, timeout=30)  # Added timeout
+        response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
         logging.info("Cloudflare API token is valid.")
         return True
@@ -93,7 +95,7 @@ def apply_waf_settings(api_token: str, zone_id: str, settings: CloudflareWAFSett
                 url=url,
                 headers=headers,
                 json=json_data,
-                timeout=30  # Added timeout
+                timeout=30
             )
             response.raise_for_status()
             return response.json()
@@ -199,7 +201,10 @@ def main(config_path: str):
         sys.exit(1)
 
     try:
-        config = Config.parse_obj(config_data)
+        # Update the config data structure to match the expected format
+        if 'waf' not in config_data:
+            config_data['waf'] = {}
+        config = Config.model_validate(config_data)
     except ValidationError as e:
         logging.error(f"Invalid configuration file: {e}")
         sys.exit(1)
@@ -217,8 +222,13 @@ def main(config_path: str):
     # Get default WAF settings
     default_waf_settings = config.waf.get('default', {})
 
-    # Process zones in parallel if multiple zones exist
-    for zone in config.waf.get('zones', []):
+    # Process zones
+    zones = config.waf.get('zones', [])
+    if not zones:
+        logging.warning("No zones found in configuration.")
+        return
+
+    for zone in zones:
         zone_id = zone.get('id')
         fqdn = zone.get('domain')
         zone_settings = zone.get('waf', {})
@@ -230,7 +240,7 @@ def main(config_path: str):
         try:
             # Merge default and zone-specific settings
             merged_settings = {**default_waf_settings, **zone_settings}
-            settings = CloudflareWAFSettings(**merged_settings)
+            settings = CloudflareWAFSettings.model_validate(merged_settings)
 
             logging.info(f"Processing zone {zone_id} for domain {fqdn}...")
             apply_waf_settings(api_token, zone_id, settings)
