@@ -16,8 +16,74 @@ GITHUB_ACTIONS = os.getenv('GITHUB_ACTIONS') == 'true'
 log_format = '::%(levelname)s :: %(message)s' if GITHUB_ACTIONS else '%(asctime)s - %(levelname)s - %(message)s'
 logging.basicConfig(level=logging.INFO, format=log_format)
 
-# Model definitions remain the same as before...
-[Previous model definitions...]
+# Model definitions
+class WAFRule(BaseModel):
+    name: str
+    expression: str
+    action: str
+    description: Optional[str] = None
+
+    @field_validator('action')
+    @classmethod
+    def validate_rule_action(cls, value: str) -> str:
+        valid_actions = {"block", "challenge", "allow", "log", "bypass", "managed_challenge", "js_challenge"}
+        if value not in valid_actions:
+            raise ValueError(f"Invalid action. Choose one of {valid_actions}")
+        return value
+
+
+class ManagedRule(BaseModel):
+    id: str
+    action: str
+    description: str
+
+
+class IPAccessRule(BaseModel):
+    action: str
+    value: str
+    description: Optional[str] = None
+
+
+class UserAgentRule(BaseModel):
+    action: str
+    value: str
+    description: Optional[str] = None
+
+
+class FirewallSettings(BaseModel):
+    security_level: Optional[str] = "medium"
+    challenge_ttl: Optional[int] = 3600
+    privacy_pass_support: Optional[bool] = True
+
+    @field_validator("security_level")
+    @classmethod
+    def validate_security_level(cls, value: str) -> str:
+        valid_levels = {"off", "essentially_off", "low", "medium", "high", "under_attack"}
+        if value not in valid_levels:
+            raise ValueError(f"Invalid security level. Choose one of {valid_levels}")
+        return value
+
+
+class WAFSettings(BaseModel):
+    managed_rules: Optional[List[ManagedRule]] = []
+    custom_rules: Optional[List[WAFRule]] = []
+    firewall_settings: Optional[FirewallSettings] = None
+
+
+class Zone(BaseModel):
+    id: str
+    domain: str
+    waf: Optional[Dict[str, Any]] = {}
+
+
+class CloudflareConfig(BaseModel):
+    ip_lists: List[Dict[str, Any]]
+    waf: Dict[str, Any]
+
+
+class Config(BaseModel):
+    cloudflare: CloudflareConfig
+
 
 class CloudflareAPI:
     def __init__(self, api_token: str):
@@ -75,6 +141,30 @@ class CloudflareAPI:
         except Exception as e:
             logging.error(f"Token validation failed: {e}")
             return False
+
+
+def process_ip_lists(config_ip_lists: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Convert IP lists to expressions"""
+    ip_list_map = {}
+    for ip_list in config_ip_lists:
+        if isinstance(ip_list, dict) and 'name' in ip_list and 'ips' in ip_list:
+            ips = ip_list['ips']
+            if isinstance(ips, list):
+                ips_str = ','.join(f'"{ip}"' for ip in ips)
+                ip_list_map[f"${ip_list['name']}"] = f"{{{ips_str}}}"
+            else:
+                logging.warning(f"Invalid IPs format for IP list {ip_list['name']}")
+    return ip_list_map
+
+
+def replace_ip_list_variables(expression: str, ip_list_map: Dict[str, str]) -> str:
+    """Replace IP list variables in expressions"""
+    result = expression
+    for var_name, ip_set in ip_list_map.items():
+        if var_name in result:
+            result = result.replace(var_name, ip_set)
+            logging.info(f"Replaced IP list variable {var_name} in expression")
+    return result
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
