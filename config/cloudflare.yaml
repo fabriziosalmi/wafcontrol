@@ -8,4 +8,4 @@ cloudflare:
         domain: "freesubnet.com"                 # Your domain
         waf:
           firewall_settings:
-            security_level: "under_attack"
+            security_level: "medium"
