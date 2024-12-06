@@ -77,6 +77,12 @@ waf:
 - **Cloudflare Account**: Ensure you have an active Cloudflare account and an API token with appropriate permissions (`Zone Settings: Edit`, `Firewall Services: Edit`).
 - **GitHub Repository**: Prepare a GitHub repository containing your YAML configuration file and this script.
 - **GitHub Actions Setup**: The solution is designed to work seamlessly with GitHub Actions for automation.
+- **Some Python tools**: pydantic, requests, PyYAML, tenacity.
+
+Install prerequisites by executing this command:
+```
+pip install git pydantic requests PyYAML tenacity
+```
 
 ### 2. Installation
 Clone the repository:
