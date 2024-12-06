@@ -1,69 +1,34 @@
-name: Cloudflare Settings Automation
+name: Your Workflow Name
 
 on:
-  workflow_dispatch:  # Allows manual triggering from GitHub Actions UI
-  schedule:
-    - cron: '0 0 * * *'  # Runs daily at midnight
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
-  apply-settings:
+  deploy:
     runs-on: ubuntu-latest
-
+    
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v2
-
-      - name: Cache pip dependencies
-        uses: actions/cache@v2
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Set up Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: '3.9'
-
-      - name: Create and activate virtual environment
-        run: |
-          python -m venv venv
-          source venv/bin/activate
-          python -m pip install --upgrade pip
-          pip install requests pydantic tenacity pyyaml
-        shell: bash  # Ensure the script runs in a bash shell
-
-      - name: Verify configuration file
-        run: |
-          source venv/bin/activate
-          if [ ! -f config/cloudflare.yaml ]; then
-            echo "::error::Configuration file not found at config/cloudflare.yaml"
-            exit 1
-          fi
-        shell: bash  # Ensure the script runs in a bash shell
-
-      - name: Set environment variables
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
-          CLOUDFLARE_FQDN: ${{ secrets.CLOUDFLARE_FQDN }}
-        run: |
-          source venv/bin/activate
-          echo "Environment variables set."
-        shell: bash  # Ensure the script runs in a bash shell
-
-      - name: Run Cloudflare script
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
-          CLOUDFLARE_FQDN: ${{ secrets.CLOUDFLARE_FQDN }}
-        run: |
-          set -e  # Ensure the script exits on any error
-          source venv/bin/activate
-          python scripts/apply_cloudflare.py --config config/cloudflare.yaml
-        shell: bash  # Ensure the script runs in a bash shell
-
-      - name: Cleanup and feedback
-        if: failure()
-        run: echo "::error::Workflow failed at some steps. Please check the logs."
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Apply WAF settings
+      run: |
+        set -e # Ensure the script exits on any error
+        python scripts/apply_cloudflare.py --config your_config.yaml
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
