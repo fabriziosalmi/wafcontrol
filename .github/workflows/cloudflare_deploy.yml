@@ -3,32 +3,106 @@ name: WAF Control
 on:
   push:
     branches: [ main ]
+    paths:
+      - 'config/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
   pull_request:
     branches: [ main ]
+    paths:
+      - 'config/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+  workflow_dispatch:  # Allow manual triggering
+  schedule:
+    - cron: '0 0 * * *'  # Run daily at midnight UTC
+
+permissions:
+  contents: read
 
 jobs:
-  deploy:
+  validate:
     runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.9'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pydantic requests PyYAML tenacity yamllint
+
+    - name: Lint YAML configuration
+      run: |
+        yamllint -c .yamllint config/
+
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency: 
+      group: ${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: false
     
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
     
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.9'
+        cache: 'pip'
     
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pydantic requests PyYAML tenacity
+        pip install -r requirements.txt || pip install pydantic requests PyYAML tenacity
+    
+    - name: Verify API token
+      if: env.CLOUDFLARE_API_TOKEN != ''
+      run: |
+        python -c "
+        import requests
+        response = requests.get(
+            'https://api.cloudflare.com/client/v4/user/tokens/verify',
+            headers={'Authorization': 'Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}'}
+        )
+        if not response.ok:
+            print('::error::Invalid or expired Cloudflare API token')
+            exit(1)
+        "
     
     - name: Apply WAF settings
+      if: success()
       run: |
-        set -e # Ensure the script exits on any error
+        # Ensure the script exits on any error
+        set -euo pipefail
+        
+        # Check if configuration file exists
+        if [ ! -f "config/cloudflare.yaml" ]; then
+          echo "::error::Configuration file not found: config/cloudflare.yaml"
+          exit 1
+        fi
+        
+        # Apply WAF settings
         python scripts/apply_cloudflare.py --config config/cloudflare.yaml
       env:
         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+    - name: Notify on failure
+      if: failure()
+      run: |
+        echo "::error::WAF Control workflow failed. Please check the logs for details."
+        exit 1
