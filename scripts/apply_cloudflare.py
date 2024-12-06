@@ -4,20 +4,22 @@ import json
 import logging
 import yaml
 import requests
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Union
 from pydantic import BaseModel, field_validator, ValidationError
 from tenacity import retry, stop_after_attempt, wait_exponential
 import argparse
+from datetime import datetime
 
 # Check if running in a GitHub Actions environment
 GITHUB_ACTIONS = os.getenv('GITHUB_ACTIONS') == 'true'
 
-# Configure logging
-if GITHUB_ACTIONS:
-    logging.basicConfig(level=logging.INFO, format='::%(levelname)s :: %(message)s')
-else:
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
+# Configure logging with timestamp
+log_format = '::%(levelname)s :: %(message)s' if GITHUB_ACTIONS else '%(asctime)s - %(levelname)s - %(message)s'
+logging.basicConfig(
+    level=logging.INFO,
+    format=log_format,
+    handlers=[logging.StreamHandler()]
+)
 
 # Cloudflare WAF settings validation models
 class WAFRule(BaseModel):
@@ -29,8 +31,9 @@ class WAFRule(BaseModel):
     @field_validator('action')
     @classmethod
     def validate_rule_action(cls, value: str) -> str:
-        if value not in {"block", "challenge", "allow", "log", "bypass"}:
-            raise ValueError("Invalid action. Choose one of 'block', 'challenge', 'allow', 'log', 'bypass'.")
+        valid_actions = {"block", "challenge", "allow", "log", "bypass", "managed_challenge", "js_challenge"}
+        if value not in valid_actions:
+            raise ValueError(f"Invalid action. Choose one of {valid_actions}")
         return value
 
 
@@ -105,166 +108,135 @@ class Config(BaseModel):
     cloudflare: CloudflareConfig
 
 
-def validate_api_token(api_token: str) -> bool:
-    url = "https://api.cloudflare.com/client/v4/user/tokens/verify"
-    headers = {
-        'Authorization': f'Bearer {api_token}',
-        'Content-Type': 'application/json'
-    }
+class CloudflareAPI:
+    def __init__(self, api_token: str):
+        self.api_token = api_token
+        self.headers = {
+            'Authorization': f'Bearer {api_token}',
+            'Content-Type': 'application/json'
+        }
 
-    try:
-        response = requests.get(url, headers=headers, timeout=30)
-        response.raise_for_status()
-        logging.info("Cloudflare API token is valid.")
-        return True
-    except requests.RequestException as e:
-        logging.error(f"API token validation failed: {e}")
-        return False
-
-
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def apply_waf_settings(api_token: str, zone_id: str, settings: WAFSettings) -> Dict[str, Any]:
-    logging.info(f"Applying WAF settings for zone {zone_id}...")
-
-    headers = {
-        'Authorization': f'Bearer {api_token}',
-        'Content-Type': 'application/json'
-    }
-
-    base_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}"
-    updated_settings = {}
-
-    def make_request(method: str, url: str, json_data: Dict[str, Any] = None) -> Dict[str, Any]:
+    def make_request(self, method: str, url: str, json_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         try:
             response = requests.request(
                 method=method,
                 url=url,
-                headers=headers,
+                headers=self.headers,
                 json=json_data,
                 timeout=30
             )
-            response.raise_for_status()
-            return response.json()
+            
+            if response.status_code == 403:
+                logging.error(f"Permission denied for {url}. Please check API token permissions.")
+                return {"success": False, "errors": ["Permission denied"]}
+
+            response_data = response.json()
+            
+            if not response_data.get('success', False):
+                errors = response_data.get('errors', [])
+                error_messages = '; '.join(str(error.get('message', 'Unknown error')) for error in errors)
+                logging.error(f"API request failed: {error_messages}")
+                return response_data
+
+            return response_data
+
         except requests.RequestException as e:
             logging.error(f"API request failed: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                logging.error(f"Response content: {e.response.content.decode()}")
             raise
 
-    # Enable/Disable WAF
-    if settings.enable_waf is not None:
+    def validate_token(self) -> bool:
+        url = "https://api.cloudflare.com/client/v4/user/tokens/verify"
         try:
-            waf_url = f"{base_url}/security/waf"
-            payload = {"value": "on" if settings.enable_waf else "off"}
-            result = make_request("PATCH", waf_url, payload)
-            updated_settings["waf_enabled"] = result
-            logging.info(f"Successfully {'enabled' if settings.enable_waf else 'disabled'} WAF.")
-        except requests.RequestException as e:
-            logging.error(f"Failed to update WAF status: {e}")
+            response = self.make_request("GET", url)
+            return response.get('success', False)
+        except Exception as e:
+            logging.error(f"Token validation failed: {e}")
+            return False
 
-    # Apply Managed Rules
-    if settings.managed_rules:
-        for rule in settings.managed_rules:
-            try:
-                # Using the new rulesets API
-                ruleset_url = f"{base_url}/rulesets/phases/http_request_firewall_managed/entrypoint"
-                payload = {
-                    "rules": [
-                        {
-                            "id": rule.id,
-                            "action": rule.action,
-                            "description": rule.description,
-                            "enabled": True
-                        }
-                    ]
-                }
-                result = make_request("PUT", ruleset_url, payload)
-                updated_settings[f"managed_rule_{rule.id}"] = result
-                logging.info(f"Successfully configured managed rule {rule.id}")
-            except requests.RequestException as e:
-                logging.error(f"Failed to configure managed rule {rule.id}: {e}")
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def apply_waf_settings(api: CloudflareAPI, zone_id: str, settings: WAFSettings) -> Dict[str, Any]:
+    logging.info(f"Applying WAF settings for zone {zone_id}...")
+    base_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}"
+    updated_settings = {}
 
     # Apply Security Level
     if settings.firewall_settings and settings.firewall_settings.security_level:
         try:
             security_url = f"{base_url}/settings/security_level"
-            payload = {"value": settings.firewall_settings.security_level}
-            result = make_request("PATCH", security_url, payload)
-            updated_settings["security_level"] = result
-            logging.info(f"Successfully updated security level.")
-        except requests.RequestException as e:
+            result = api.make_request(
+                "PATCH",
+                security_url,
+                {"value": settings.firewall_settings.security_level}
+            )
+            if result.get('success'):
+                updated_settings["security_level"] = result
+                logging.info(f"Successfully updated security level.")
+        except Exception as e:
             logging.error(f"Failed to update security level: {e}")
 
-    # Apply Bot Fight Mode
-    if settings.firewall_settings and settings.firewall_settings.bot_fight_mode:
+    # Apply Bot Management Settings
+    if settings.firewall_settings and settings.firewall_settings.bot_fight_mode is not None:
         try:
-            bot_url = f"{base_url}/settings/bot_fight_mode"
-            payload = {"value": "on" if settings.firewall_settings.bot_fight_mode else "off"}
-            result = make_request("PATCH", bot_url, payload)
-            updated_settings["bot_fight_mode"] = result
-            logging.info(f"Successfully updated Bot Fight Mode.")
-        except requests.RequestException as e:
-            logging.error(f"Failed to update Bot Fight Mode: {e}")
+            bot_url = f"{base_url}/settings/bot_management"
+            result = api.make_request(
+                "PATCH",
+                bot_url,
+                {"value": "on" if settings.firewall_settings.bot_fight_mode else "off"}
+            )
+            if result.get('success'):
+                updated_settings["bot_management"] = result
+                logging.info(f"Successfully updated bot management settings.")
+        except Exception as e:
+            logging.error(f"Failed to update bot management settings: {e}")
 
-    # Apply IP Access Rules
-    if settings.firewall_settings and settings.firewall_settings.ip_access_rules:
-        for rule in settings.firewall_settings.ip_access_rules:
-            try:
-                rules_url = f"{base_url}/firewall/rules"
-                payload = {
-                    "rules": [
-                        {
-                            "action": rule.action,
-                            "expression": f"ip.src in {{{rule.value}}}",
-                            "description": rule.description or "",
-                            "enabled": True
-                        }
-                    ]
-                }
-                result = make_request("POST", rules_url, payload)
-                updated_settings[f"ip_rule_{rule.value}"] = result
-                logging.info(f"Successfully added IP rule for {rule.value}")
-            except requests.RequestException as e:
-                logging.error(f"Failed to add IP rule for {rule.value}: {e}")
-
-    # Apply User Agent Rules
-    if settings.firewall_settings and settings.firewall_settings.user_agent_rules:
-        for rule in settings.firewall_settings.user_agent_rules:
-            try:
-                rules_url = f"{base_url}/firewall/rules"
-                payload = {
-                    "rules": [
-                        {
-                            "action": rule.action,
-                            "expression": f"http.user_agent contains \"{rule.value}\"",
-                            "description": rule.description or "",
-                            "enabled": True
-                        }
-                    ]
-                }
-                result = make_request("POST", rules_url, payload)
-                updated_settings[f"ua_rule_{rule.value}"] = result
-                logging.info(f"Successfully added User-Agent rule for {rule.value}")
-            except requests.RequestException as e:
-                logging.error(f"Failed to add User-Agent rule for {rule.value}: {e}")
-
-    # Apply Custom Rules
+    # Apply Custom Rules using Firewall Rules API
     if settings.custom_rules:
         try:
-            rules_url = f"{base_url}/firewall/rules"
-            rules = [
-                {
-                    "action": rule.action,
+            for rule in settings.custom_rules:
+                # First create a filter
+                filters_url = f"{base_url}/filters"
+                filter_payload = {
                     "expression": rule.expression,
-                    "description": rule.description or "",
-                    "enabled": True
+                    "description": rule.description or f"Filter for {rule.name}"
                 }
-                for rule in settings.custom_rules
-            ]
-            payload = {"rules": rules}
-            result = make_request("POST", rules_url, payload)
-            updated_settings["custom_rules"] = result
-            logging.info("Successfully added custom rules")
-        except requests.RequestException as e:
+                filter_result = api.make_request("POST", filters_url, filter_payload)
+                
+                if filter_result.get('success') and 'result' in filter_result:
+                    filter_id = filter_result['result']['id']
+                    
+                    # Then create the firewall rule
+                    rules_url = f"{base_url}/firewall/rules"
+                    rule_payload = {
+                        "filter": {"id": filter_id},
+                        "action": rule.action,
+                        "description": rule.description or "",
+                        "paused": False
+                    }
+                    rule_result = api.make_request("POST", rules_url, rule_payload)
+                    
+                    if rule_result.get('success'):
+                        updated_settings[f"custom_rule_{rule.name}"] = rule_result
+                        logging.info(f"Successfully added custom rule: {rule.name}")
+        except Exception as e:
             logging.error(f"Failed to add custom rules: {e}")
+
+    # Apply WAF Configuration
+    if settings.enable_waf is not None:
+        try:
+            waf_url = f"{base_url}/settings/waf"
+            result = api.make_request(
+                "PATCH",
+                waf_url,
+                {"value": "on" if settings.enable_waf else "off"}
+            )
+            if result.get('success'):
+                updated_settings["waf_status"] = result
+                logging.info(f"Successfully {'enabled' if settings.enable_waf else 'disabled'} WAF.")
+        except Exception as e:
+            logging.error(f"Failed to update WAF status: {e}")
 
     return updated_settings
 
@@ -297,19 +269,20 @@ def main(config_path: str):
         logging.error("Cloudflare API token not found in environment variables.")
         sys.exit(1)
 
+    api = CloudflareAPI(api_token)
+
     # Validate the API token before proceeding
-    if not validate_api_token(api_token):
+    if not api.validate_token():
         logging.error("API token validation failed. Exiting.")
         sys.exit(1)
-
-    # Get default WAF settings
-    default_waf_settings = cloudflare_config.waf.get('default', {})
 
     # Process zones
     zones = cloudflare_config.waf.get('zones', [])
     if not zones:
         logging.warning("No zones found in configuration.")
         return
+
+    default_waf_settings = cloudflare_config.waf.get('default', {})
 
     for zone in zones:
         zone_id = zone.get('id')
@@ -321,12 +294,11 @@ def main(config_path: str):
             continue
 
         try:
-            # Merge default and zone-specific settings
             merged_settings = {**default_waf_settings, **zone_settings}
             settings = WAFSettings.model_validate(merged_settings)
 
             logging.info(f"Processing zone {zone_id} for domain {fqdn}...")
-            apply_waf_settings(api_token, zone_id, settings)
+            apply_waf_settings(api, zone_id, settings)
         except Exception as e:
             logging.error(f"Failed to process zone {fqdn} ({zone_id}): {e}")
             continue
