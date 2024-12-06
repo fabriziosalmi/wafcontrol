@@ -4,7 +4,7 @@ import json
 import logging
 import yaml
 import requests
-from typing import List, Dict, Optional, Any, Union
+from typing import List, Dict, Optional, Any
 from pydantic import BaseModel, field_validator, ValidationError
 from tenacity import retry, stop_after_attempt, wait_exponential
 import argparse
@@ -26,34 +26,14 @@ class WAFRule(BaseModel):
     @field_validator('action')
     @classmethod
     def validate_rule_action(cls, value: str) -> str:
-        valid_actions = {"block", "challenge", "allow", "log", "bypass", "managed_challenge", "js_challenge"}
+        valid_actions = {"block", "challenge", "allow", "log", "js_challenge"}
         if value not in valid_actions:
             raise ValueError(f"Invalid action. Choose one of {valid_actions}")
         return value
 
 
-class ManagedRule(BaseModel):
-    id: str
-    action: str
-    description: str
-
-
-class IPAccessRule(BaseModel):
-    action: str
-    value: str
-    description: Optional[str] = None
-
-
-class UserAgentRule(BaseModel):
-    action: str
-    value: str
-    description: Optional[str] = None
-
-
 class FirewallSettings(BaseModel):
     security_level: Optional[str] = "medium"
-    challenge_ttl: Optional[int] = 3600
-    privacy_pass_support: Optional[bool] = True
 
     @field_validator("security_level")
     @classmethod
@@ -65,15 +45,8 @@ class FirewallSettings(BaseModel):
 
 
 class WAFSettings(BaseModel):
-    managed_rules: Optional[List[ManagedRule]] = []
     custom_rules: Optional[List[WAFRule]] = []
     firewall_settings: Optional[FirewallSettings] = None
-
-
-class Zone(BaseModel):
-    id: str
-    domain: str
-    waf: Optional[Dict[str, Any]] = {}
 
 
 class CloudflareConfig(BaseModel):
@@ -104,11 +77,6 @@ class CloudflareAPI:
                 timeout=30
             )
             
-            # Log the request details for debugging
-            logging.debug(f"API Request: {method} {url}")
-            if json_data:
-                logging.debug(f"Request Body: {json.dumps(json_data, indent=2)}")
-            
             try:
                 response_data = response.json()
             except json.JSONDecodeError:
@@ -119,10 +87,6 @@ class CloudflareAPI:
                 errors = response_data.get('errors', [])
                 error_messages = '; '.join(str(error.get('message', 'Unknown error')) for error in errors)
                 logging.error(f"API request failed: {error_messages}")
-                if response.status_code == 403:
-                    logging.error("Permission denied. Please check API token permissions.")
-                elif response.status_code == 405:
-                    logging.error(f"Method {method} not allowed for this endpoint.")
                 return response_data
 
             return response_data
@@ -188,80 +152,30 @@ def apply_waf_settings(api: CloudflareAPI, zone_id: str, settings: WAFSettings, 
         except Exception as e:
             logging.error(f"Failed to update security level: {e}")
 
-    # Apply Custom Rules using Firewall Rules
+    # Apply Firewall Rules
     if settings.custom_rules:
         try:
-            # First, list existing rules
-            list_rules_url = f"{base_url}/firewall/rules"
-            existing_rules = api.make_request("GET", list_rules_url)
-            
-            if existing_rules.get('success'):
-                # Delete existing rules
-                for rule in existing_rules.get('result', []):
-                    delete_url = f"{base_url}/firewall/rules/{rule['id']}"
-                    api.make_request("DELETE", delete_url)
-            
-            # Create new rules
-            rules_to_create = []
+            rules = []
             for rule in settings.custom_rules:
                 processed_expression = replace_ip_list_variables(rule.expression, ip_list_map)
                 rule_data = {
                     "action": rule.action,
                     "expression": processed_expression,
                     "description": rule.description or "",
-                    "enabled": True,
-                    "ref": rule.name
+                    "enabled": True
                 }
-                rules_to_create.append(rule_data)
+                rules.append(rule_data)
 
-            if rules_to_create:
+            if rules:
                 create_url = f"{base_url}/firewall/rules"
-                result = api.make_request("POST", create_url, {"rules": rules_to_create})
-                
+                result = api.make_request("POST", create_url, {"rules": rules})
                 if result.get('success'):
-                    updated_settings["custom_rules"] = result
-                    logging.info(f"Successfully added {len(rules_to_create)} custom rules")
+                    updated_settings["firewall_rules"] = result
+                    logging.info(f"Successfully added {len(rules)} firewall rules")
                 else:
-                    logging.error(f"Failed to add custom rules: {result.get('errors', [])}")
-        
+                    logging.error(f"Failed to add firewall rules: {result.get('errors', [])}")
         except Exception as e:
-            logging.error(f"Failed to update custom rules: {e}")
-
-    # Apply Managed Rules
-    if settings.managed_rules:
-        try:
-            # List available rulesets
-            rulesets_url = f"{base_url}/rulesets"
-            available_rulesets = api.make_request("GET", rulesets_url)
-            
-            if available_rulesets.get('success'):
-                managed_ruleset_id = None
-                for ruleset in available_rulesets.get('result', []):
-                    if ruleset.get('kind') == 'managed':
-                        managed_ruleset_id = ruleset.get('id')
-                        break
-                
-                if managed_ruleset_id:
-                    for rule in settings.managed_rules:
-                        # Update rule configuration
-                        rule_url = f"{base_url}/rulesets/{managed_ruleset_id}/rules/{rule.id}"
-                        rule_data = {
-                            "action": rule.action,
-                            "description": rule.description,
-                            "enabled": True
-                        }
-                        
-                        result = api.make_request("PUT", rule_url, rule_data)
-                        if result.get('success'):
-                            updated_settings[f"managed_rule_{rule.id}"] = result
-                            logging.info(f"Successfully updated managed rule {rule.id}")
-                        else:
-                            logging.error(f"Failed to update managed rule {rule.id}")
-                else:
-                    logging.error("No managed ruleset found for the zone")
-            
-        except Exception as e:
-            logging.error(f"Failed to apply managed rules: {e}")
+            logging.error(f"Failed to add firewall rules: {e}")
 
     return updated_settings
 
