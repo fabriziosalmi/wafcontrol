@@ -1,54 +1,11 @@
 cloudflare:
-  ip_lists:
-    - name: "trusted_partners"
-      description: "List of trusted partner IP addresses"
-      ips:
-        - "203.0.113.0/24"
-        - "198.51.100.12"
-    - name: "suspicious_ips"
-      description: "List of known suspicious IP addresses"
-      ips:
-        - "192.0.2.0/24"
-        - "198.51.100.45"
-    - name: "internal_network"
-      description: "List of internal IPs for company use"
-      ips:
-        - "10.0.0.0/8"
-        - "172.16.0.0/12"
   waf:
     default:
-      custom_rules:
-        - name: "Block Suspicious IPs"
-          expression: "(ip.src in $suspicious_ips)"
-          action: "block"
-          description: "Block requests from a suspicious IP list"
-        - name: "Challenge High-Risk Countries"
-          expression: "(ip.geoip.country in {'CN' 'RU'})"
-          action: "challenge"
-          description: "Challenge traffic from high-risk countries"
-        - name: "Allow Good Bots"
-          expression: "(cf.client.bot and http.user_agent contains 'Googlebot')"
-          action: "allow"
-          description: "Allow access only for recognized good bots like Googlebot"
-        - name: "Block Bad Bots"
-          expression: "(http.user_agent contains 'BadBot')"
-          action: "block"
-          description: "Block requests from known bad bots"
       firewall_settings:
         security_level: "high"
-
     zones:
-      - id: "b441db6e139659910adc1155990213e2"  # Replace with your zone ID
-        domain: "freesubnet.com"   # Replace with your domain
+      - id: "b441db6e139659910adc1155990213e2"  # Your zone ID
+        domain: "freesubnet.com"                 # Your domain
         waf:
-          custom_rules:
-            - name: "Allow Internal Network"
-              expression: "(ip.src in $internal_network)"
-              action: "allow"
-              description: "Allow access from internal company IP range"
-            - name: "Allow Trusted Partners"
-              expression: "(ip.src in $trusted_partners)"
-              action: "allow"
-              description: "Allow access from trusted partners"
           firewall_settings:
             security_level: "under_attack"
