@@ -15,21 +15,6 @@ log_format = '::%(levelname)s :: %(message)s' if GITHUB_ACTIONS else '%(asctime)
 logging.basicConfig(level=logging.INFO, format=log_format)
 
 # Model definitions
-class WAFRule(BaseModel):
-    name: str
-    expression: str
-    action: str
-    description: Optional[str] = None
-
-    @field_validator('action')
-    @classmethod
-    def validate_rule_action(cls, value: str) -> str:
-        valid_actions = {"block", "challenge", "allow", "js_challenge"}
-        if value not in valid_actions:
-            raise ValueError(f"Invalid action. Choose one of {valid_actions}")
-        return value
-
-
 class FirewallSettings(BaseModel):
     security_level: Optional[str] = "medium"
 
@@ -43,7 +28,6 @@ class FirewallSettings(BaseModel):
 
 
 class WAFSettings(BaseModel):
-    custom_rules: Optional[List[WAFRule]] = []
     firewall_settings: Optional[FirewallSettings] = None
 
 
@@ -124,53 +108,6 @@ def apply_waf_settings(api: CloudflareAPI, zone_id: str, settings: WAFSettings) 
                 logging.info(f"Successfully updated security level to {settings.firewall_settings.security_level}")
         except Exception as e:
             logging.error(f"Failed to update security level: {e}")
-
-    # Handle Custom Rules
-    if settings.custom_rules:
-        try:
-            # Create filter and rules combination
-            filters_url = f"{base_url}/filters"
-            rules_url = f"{base_url}/firewall/rules"
-            
-            # Ensure we don't exceed the free plan limit
-            rules_to_create = settings.custom_rules[:5]
-            if len(settings.custom_rules) > 5:
-                logging.warning("More than 5 rules provided. Only the first 5 will be created (free plan limit).")
-
-            # Create rules one by one to avoid potential issues
-            for rule in rules_to_create:
-                try:
-                    # Create filter first
-                    filter_data = {
-                        "expression": rule.expression,
-                        "description": f"Filter for {rule.name}"
-                    }
-                    filter_result = api.make_request("POST", filters_url, filter_data)
-                    
-                    if filter_result.get('success') and filter_result.get('result'):
-                        filter_id = filter_result['result']['id']
-                        
-                        # Create rule using the filter
-                        rule_data = {
-                            "filter": {"id": filter_id},
-                            "action": rule.action,
-                            "description": rule.description or rule.name,
-                            "enabled": True,
-                            "ref": rule.name
-                        }
-                        
-                        rule_result = api.make_request("POST", rules_url, rule_data)
-                        if rule_result.get('success'):
-                            logging.info(f"Successfully created rule: {rule.name}")
-                        else:
-                            logging.error(f"Failed to create rule {rule.name}: {rule_result.get('errors', [])}")
-                    
-                except Exception as e:
-                    logging.error(f"Failed to create rule {rule.name}: {e}")
-                    continue
-
-        except Exception as e:
-            logging.error(f"Failed to manage WAF rules: {e}")
 
     return updated_settings
 
