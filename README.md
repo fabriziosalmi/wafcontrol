@@ -1,175 +1,185 @@
 # 🌐 WAFcontrol (Cloudflare WAF Settings Automation)
 
-Welcome to **WAFcontrol**, a powerful, scalable, and fully automated solution for managing Cloudflare Web Application Firewall (WAF) rules across multiple zones. This tool allows you to define default configurations and customize WAF settings for individual domains, all while leveraging Cloudflare’s robust API to enhance your security posture.
+Welcome to **WAFcontrol**, a streamlined solution for managing Cloudflare Web Application Firewall (WAF) security levels across multiple zones. This tool allows you to manage security levels for individual domains through a simple YAML configuration.
 
 ## 🚀 Project Summary
 
-**WAFcontrol** provides a centralized and automated solution to manage WAF settings for multiple Cloudflare domains using a YAML configuration file. You can define WAF rules, IP access lists, bot protection settings, and sensitivity levels in a declarative manner, and easily apply these settings using a single script.
+**WAFcontrol** provides a centralized and automated solution to manage security levels for multiple Cloudflare domains using a YAML configuration file. You can define default security settings and customize them for individual domains, all managed through GitHub Actions automation.
 
 ## ✨ Features Overview
 
 ### Core Features
-- **Multi-Zone Support**: Manage WAF settings across multiple domains using a unified configuration.
-- **Declarative YAML Configuration**: Simplify security management with a human-readable YAML file.
-- **Custom Rules**: Define IP access, User-Agent rules, and custom WAF expressions.
-- **Free Plan Compatibility**: Compatible with Cloudflare's free plan features.
-- **Automation**: Easily integrate with GitHub Actions or other CI/CD tools.
+- **Multi-Zone Support**: Manage security settings across multiple domains using a unified configuration
+- **Declarative YAML Configuration**: Simplify security management with a human-readable YAML file
+- **Free Plan Compatibility**: Works with Cloudflare's free plan
+- **GitHub Actions Integration**: Built-in automation support
 
-### WAF Features Managed
-- **WAF Sensitivity Level**: Control sensitivity (`low`, `medium`, `high`).
-- **Bot Fight Mode**: Enable/disable Cloudflare Bot Fight Mode.
-- **IP Access Rules**: Define IP addresses/ranges to allow or block.
-- **User-Agent Rules**: Create rules to block or challenge specific User-Agent strings.
-- **Custom WAF Rules**: Use custom expressions to define WAF actions (`block`, `challenge`, `allow`).
+### Security Features Managed
+- **Security Level Control**: Set security levels for each zone
+  - Available options: `off`, `essentially_off`, `low`, `medium`, `high`, `under_attack`
+- **Default Settings**: Define default security levels that apply to all zones
+- **Zone-Specific Overrides**: Customize security levels for individual domains
 
 ## 🛠️ How It Works
 
-1. **Configuration**: Define all WAF settings in a YAML file. Use common configurations under a `default` section, and customize specific zones with overrides.
-2. **Execution**: The script reads the configuration, applies the settings using Cloudflare’s API, and logs the results.
-3. **Automation**: Seamlessly integrate with GitHub Actions or other CI/CD tools to automate the process.
+1. **Configuration**: Define security levels in a YAML file, with common settings under `default` and zone-specific overrides
+2. **Execution**: The script applies the settings using Cloudflare's API and logs the results
+3. **Automation**: Runs automatically through GitHub Actions on schedule or manual trigger
 
 ## 📄 YAML Configuration Example
 
-The configuration is written in YAML format for simplicity. Below is an example that defines default WAF settings and customizations for specific zones.
-
 ```yaml
-ip_lists:
-  trusted_partners:
-    - "203.0.113.0/24"
-    - "198.51.100.12"
-  suspicious_ips:
-    - "192.0.2.0/24"
-    - "198.51.100.45"
-
-waf:
-  default:
-    enable_waf: true
-    sensitivity: "medium"
-    bot_fight_mode: true
-    ip_access_rules: 
-      - "$trusted_partners"
-    user_agent_rules: 
-      - "BadBot"
-    custom_rules:
-      - name: "Block Suspicious IPs"
-        expression: "(ip.src in $suspicious_ips)"
-        action: "block"
-        description: "Block requests from suspicious IPs"
-
-  zones:
-    - id: "1234567890abcdef1234567890abcdef"
-      domain: "example.com"
-      waf:
-        sensitivity: "high"
-        custom_rules:
-          - name: "Challenge Traffic from CN"
-            expression: "(ip.geoip.country eq 'CN')"
-            action: "challenge"
-            description: "Challenge all traffic from China"
+cloudflare:
+  waf:
+    default:
+      firewall_settings:
+        security_level: "high"
+    zones:
+      - id: "your-zone-id"
+        domain: "your-domain.com"
+        waf:
+          firewall_settings:
+            security_level: "under_attack"
 ```
 
 ## 🏗️ Setup Instructions
 
 ### 1. Prerequisites
-- **Cloudflare Account**: Ensure you have an active Cloudflare account and an API token with appropriate permissions (`Zone Settings: Edit`, `Firewall Services: Edit`).
-- **GitHub Repository**: Prepare a GitHub repository containing your YAML configuration file and this script.
-- **GitHub Actions Setup**: The solution is designed to work seamlessly with GitHub Actions for automation.
-- **Some Python tools**: pydantic, requests, PyYAML, tenacity.
+- Cloudflare Account with API token
+- GitHub repository
+- Python 3.9 or higher
 
-Install prerequisites by executing this command:
-```
-pip install git pydantic requests PyYAML tenacity
-```
+Required API token permissions:
+- Zone Settings:Edit
 
 ### 2. Installation
-Clone the repository:
 
+1. Clone the repository:
 ```bash
 git clone https://github.com/fabriziosalmi/wafcontrol.git
 cd wafcontrol
 ```
 
-### 3. Configuration
-- **Cloudflare API Token**: Create an API token via the Cloudflare dashboard and add it as a secret in your GitHub repository (`CLOUDFLARE_API_TOKEN`).
-- **YAML Configuration**: Edit `config/cloudflare.yaml` to define your WAF settings.
-
-### 4. Running the Script
-Run the script manually for testing:
-
+2. Install dependencies:
 ```bash
-python scripts/cloudflare_apply.py --config config/cloudflare.yaml
+pip install pydantic requests PyYAML tenacity
 ```
 
-### 5. Automating with GitHub Actions
-Create a workflow file in `.github/workflows/cloudflare_deploy.yml` to automate updates:
+### 3. Configuration
 
+1. Create Cloudflare API token:
+   - Go to Cloudflare Dashboard → Profile → API Tokens
+   - Create token with `Zone Settings:Edit` permission
+   - Add token to GitHub repository secrets as `CLOUDFLARE_API_TOKEN`
+
+2. Configure your zones:
+   - Edit `config/cloudflare.yaml` with your zone IDs and domains
+   - Set desired security levels for each zone
+
+### 4. GitHub Actions Setup
+
+The workflow runs automatically:
+- On push to main branch (affecting relevant files)
+- Daily at midnight UTC
+- Manual trigger through GitHub Actions UI
+
+Workflow file `.github/workflows/waf-control.yml`:
 ```yaml
-name: Cloudflare WAF Management
+name: WAF Control
 
 on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'config/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *'  # Runs daily at midnight
+    - cron: '0 0 * * *'
 
 jobs:
-  apply-waf-settings:
+  deploy:
     runs-on: ubuntu-latest
-
+    environment: production
+    
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v2
-
-      - name: Set up Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: '3.9'
-
-      - name: Install dependencies
-        run: |
-          python -m venv venv
-          source venv/bin/activate
-          python -m pip install --upgrade pip
-          pip install requests pydantic tenacity pyyaml
-
-      - name: Run WAF Control script
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: |
-          source venv/bin/activate
-          python scripts/cloudflare_apply.py --config config/cloudflare.yaml
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.9'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pydantic requests PyYAML tenacity
+    
+    - name: Apply WAF settings
+      run: python scripts/apply_cloudflare.py --config config/cloudflare.yaml
 ```
 
 ## 📊 Example Output
 
-Here’s an example log output showing a successful update:
-
 ```plaintext
-::INFO:: Cloudflare API token is valid.
-::INFO:: Processing zone 1234567890abcdef1234567890abcdef for domain example.com...
-::INFO:: Applying WAF settings for zone 1234567890abcdef1234567890abcdef...
-::INFO:: Successfully updated sensitivity to high.
-::INFO:: Successfully enabled Bot Fight Mode.
-::INFO:: Successfully added IP access rule for trusted partner IPs.
-::INFO:: Successfully added custom WAF rule: Challenge Traffic from CN.
+::INFO :: Cloudflare API token is valid.
+::INFO :: Processing zone example.com (zone-id)...
+::INFO :: Applying WAF settings for zone zone-id...
+::INFO :: Successfully updated security level to under_attack
 ```
 
 ## 🛡️ Security Considerations
 
-### Token and Secret Management
-- **API Token**: **Never** store your Cloudflare API token in the repository. Use GitHub Secrets to protect sensitive information.
+- Never commit API tokens to the repository
+- Use GitHub Secrets for sensitive information
+- Use environment protection rules for production deployments
+- Double-check zone IDs and domains before deployment
 
-### Error Handling
-- The script handles errors gracefully, skipping unsupported configurations and logging detailed information to ensure your workflow isn’t disrupted.
+## 🔧 Supported Zones
 
-## 🔧 Customization and Extensibility
-
-- **Custom Rules**: You can add new WAF rules in the YAML file to adapt to changing security requirements.
-- **Integration**: Modify the workflow to integrate with other CI/CD systems, or extend the script to support more Cloudflare API features.
+You can apply the security settings to any Cloudflare zone, including free domains. The security level control works with all Cloudflare plans.
 
 ## 👨‍💻 Contributing
 
-Contributions are welcome! If you have new feature suggestions or find bugs, feel free to open an issue or submit a pull request.
+Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+
+Guidelines for contributing:
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
+
+## 🐛 Troubleshooting
+
+Common issues and solutions:
+
+1. **API Token Issues**:
+   - Ensure the token has `Zone Settings:Edit` permission
+   - Verify the token is correctly added to GitHub Secrets
+   - Check the token is not expired
+
+2. **Configuration Issues**:
+   - Verify zone IDs are correct
+   - Ensure YAML syntax is valid
+   - Check security level values are valid options
 
 ## 📄 License
 
-This project is licensed under the MIT License. See the LICENSE file for more details.
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## 📞 Support
+
+If you encounter any issues or need help:
+1. Check the troubleshooting guide above
+2. Look through existing GitHub Issues
+3. Open a new issue if needed
+
+## 🙏 Acknowledgments
+
+- Thanks to Cloudflare for their excellent API
+- Contributors who have helped improve this tool
+- The open-source community for inspiration and support
