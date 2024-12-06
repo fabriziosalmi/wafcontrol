@@ -29,8 +29,8 @@ class WAFRule(BaseModel):
     @field_validator('action')
     @classmethod
     def validate_rule_action(cls, value: str) -> str:
-        if value not in {"block", "challenge", "allow"}:
-            raise ValueError("Invalid action. Choose one of 'block', 'challenge', 'allow'.")
+        if value not in {"block", "challenge", "allow", "log", "bypass"}:
+            raise ValueError("Invalid action. Choose one of 'block', 'challenge', 'allow', 'log', 'bypass'.")
         return value
 
 
@@ -105,7 +105,6 @@ class Config(BaseModel):
     cloudflare: CloudflareConfig
 
 
-# Function to validate the API token by calling the Cloudflare API
 def validate_api_token(api_token: str) -> bool:
     url = "https://api.cloudflare.com/client/v4/user/tokens/verify"
     headers = {
@@ -123,7 +122,6 @@ def validate_api_token(api_token: str) -> bool:
         return False
 
 
-# Retry with exponential backoff for API errors
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def apply_waf_settings(api_token: str, zone_id: str, settings: WAFSettings) -> Dict[str, Any]:
     logging.info(f"Applying WAF settings for zone {zone_id}...")
@@ -133,10 +131,9 @@ def apply_waf_settings(api_token: str, zone_id: str, settings: WAFSettings) -> D
         'Content-Type': 'application/json'
     }
 
-    base_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/firewall"
+    base_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}"
     updated_settings = {}
 
-    # Helper function for API requests
     def make_request(method: str, url: str, json_data: Dict[str, Any] = None) -> Dict[str, Any]:
         try:
             response = requests.request(
@@ -152,109 +149,122 @@ def apply_waf_settings(api_token: str, zone_id: str, settings: WAFSettings) -> D
             logging.error(f"API request failed: {e}")
             raise
 
+    # Enable/Disable WAF
+    if settings.enable_waf is not None:
+        try:
+            waf_url = f"{base_url}/security/waf"
+            payload = {"value": "on" if settings.enable_waf else "off"}
+            result = make_request("PATCH", waf_url, payload)
+            updated_settings["waf_enabled"] = result
+            logging.info(f"Successfully {'enabled' if settings.enable_waf else 'disabled'} WAF.")
+        except requests.RequestException as e:
+            logging.error(f"Failed to update WAF status: {e}")
+
     # Apply Managed Rules
     if settings.managed_rules:
         for rule in settings.managed_rules:
             try:
-                managed_rule_url = f"{base_url}/waf/packages/{rule.id}/rules"
+                # Using the new rulesets API
+                ruleset_url = f"{base_url}/rulesets/phases/http_request_firewall_managed/entrypoint"
                 payload = {
-                    "mode": rule.action,
-                    "notes": rule.description
+                    "rules": [
+                        {
+                            "id": rule.id,
+                            "action": rule.action,
+                            "description": rule.description,
+                            "enabled": True
+                        }
+                    ]
                 }
-                result = make_request("PATCH", managed_rule_url, payload)
+                result = make_request("PUT", ruleset_url, payload)
                 updated_settings[f"managed_rule_{rule.id}"] = result
                 logging.info(f"Successfully configured managed rule {rule.id}")
             except requests.RequestException as e:
                 logging.error(f"Failed to configure managed rule {rule.id}: {e}")
 
-    # Apply Firewall Settings
-    if settings.firewall_settings:
-        fw_settings = settings.firewall_settings
+    # Apply Security Level
+    if settings.firewall_settings and settings.firewall_settings.security_level:
+        try:
+            security_url = f"{base_url}/settings/security_level"
+            payload = {"value": settings.firewall_settings.security_level}
+            result = make_request("PATCH", security_url, payload)
+            updated_settings["security_level"] = result
+            logging.info(f"Successfully updated security level.")
+        except requests.RequestException as e:
+            logging.error(f"Failed to update security level: {e}")
 
-        # Update Sensitivity
-        if fw_settings.sensitivity:
-            try:
-                sensitivity_url = f"{base_url}/waf/sensitivity"
-                result = make_request("PATCH", sensitivity_url, {"value": fw_settings.sensitivity})
-                updated_settings["sensitivity"] = result
-                logging.info(f"Successfully updated sensitivity to {fw_settings.sensitivity}.")
-            except requests.RequestException as e:
-                logging.error(f"Failed to update WAF sensitivity: {e}")
+    # Apply Bot Fight Mode
+    if settings.firewall_settings and settings.firewall_settings.bot_fight_mode:
+        try:
+            bot_url = f"{base_url}/settings/bot_fight_mode"
+            payload = {"value": "on" if settings.firewall_settings.bot_fight_mode else "off"}
+            result = make_request("PATCH", bot_url, payload)
+            updated_settings["bot_fight_mode"] = result
+            logging.info(f"Successfully updated Bot Fight Mode.")
+        except requests.RequestException as e:
+            logging.error(f"Failed to update Bot Fight Mode: {e}")
 
-        # Update Security Level
-        if fw_settings.security_level:
+    # Apply IP Access Rules
+    if settings.firewall_settings and settings.firewall_settings.ip_access_rules:
+        for rule in settings.firewall_settings.ip_access_rules:
             try:
-                security_level_url = f"{base_url}/settings/security_level"
-                result = make_request("PATCH", security_level_url, {"value": fw_settings.security_level})
-                updated_settings["security_level"] = result
-                logging.info(f"Successfully updated security level to {fw_settings.security_level}.")
-            except requests.RequestException as e:
-                logging.error(f"Failed to update security level: {e}")
-
-        # Update Bot Fight Mode
-        if fw_settings.bot_fight_mode:
-            try:
-                bot_fight_url = f"{base_url}/settings/bot_fight_mode"
-                result = make_request("PATCH", bot_fight_url, {"value": "on"})
-                updated_settings["bot_fight_mode"] = result
-                logging.info("Successfully enabled Bot Fight Mode.")
-            except requests.RequestException as e:
-                logging.error(f"Failed to enable Bot Fight Mode: {e}")
-
-        # Apply IP Access Rules
-        for rule in fw_settings.ip_access_rules:
-            try:
-                ip_rule_url = f"{base_url}/access_rules/rules"
+                rules_url = f"{base_url}/firewall/rules"
                 payload = {
-                    "mode": rule.action,
-                    "configuration": {
-                        "target": "ip",
-                        "value": rule.value
-                    },
-                    "notes": rule.description or ""
+                    "rules": [
+                        {
+                            "action": rule.action,
+                            "expression": f"ip.src in {{{rule.value}}}",
+                            "description": rule.description or "",
+                            "enabled": True
+                        }
+                    ]
                 }
-                result = make_request("POST", ip_rule_url, payload)
-                updated_settings[f"ip_access_rule_{rule.value}"] = result
-                logging.info(f"Successfully added IP access rule for {rule.value}.")
+                result = make_request("POST", rules_url, payload)
+                updated_settings[f"ip_rule_{rule.value}"] = result
+                logging.info(f"Successfully added IP rule for {rule.value}")
             except requests.RequestException as e:
-                logging.error(f"Failed to add IP access rule for {rule.value}: {e}")
+                logging.error(f"Failed to add IP rule for {rule.value}: {e}")
 
-        # Apply User Agent Rules
-        for rule in fw_settings.user_agent_rules:
+    # Apply User Agent Rules
+    if settings.firewall_settings and settings.firewall_settings.user_agent_rules:
+        for rule in settings.firewall_settings.user_agent_rules:
             try:
-                ua_rule_url = f"{base_url}/access_rules/rules"
+                rules_url = f"{base_url}/firewall/rules"
                 payload = {
-                    "mode": rule.action,
-                    "configuration": {
-                        "target": "ua",
-                        "value": rule.value
-                    },
-                    "notes": rule.description or ""
+                    "rules": [
+                        {
+                            "action": rule.action,
+                            "expression": f"http.user_agent contains \"{rule.value}\"",
+                            "description": rule.description or "",
+                            "enabled": True
+                        }
+                    ]
                 }
-                result = make_request("POST", ua_rule_url, payload)
-                updated_settings[f"user_agent_rule_{rule.value}"] = result
-                logging.info(f"Successfully added User-Agent rule for {rule.value}.")
+                result = make_request("POST", rules_url, payload)
+                updated_settings[f"ua_rule_{rule.value}"] = result
+                logging.info(f"Successfully added User-Agent rule for {rule.value}")
             except requests.RequestException as e:
                 logging.error(f"Failed to add User-Agent rule for {rule.value}: {e}")
 
-    # Apply Custom WAF Rules
+    # Apply Custom Rules
     if settings.custom_rules:
-        for rule in settings.custom_rules:
-            try:
-                custom_rule_url = f"{base_url}/waf/custom_rules"
-                payload = {
-                    "description": rule.description or "",
+        try:
+            rules_url = f"{base_url}/firewall/rules"
+            rules = [
+                {
                     "action": rule.action,
-                    "filter": {
-                        "expression": rule.expression
-                    },
-                    "paused": False
+                    "expression": rule.expression,
+                    "description": rule.description or "",
+                    "enabled": True
                 }
-                result = make_request("POST", custom_rule_url, payload)
-                updated_settings[f"custom_rule_{rule.name}"] = result
-                logging.info(f"Successfully added custom WAF rule: {rule.name}.")
-            except requests.RequestException as e:
-                logging.error(f"Failed to add custom WAF rule {rule.name}: {e}")
+                for rule in settings.custom_rules
+            ]
+            payload = {"rules": rules}
+            result = make_request("POST", rules_url, payload)
+            updated_settings["custom_rules"] = result
+            logging.info("Successfully added custom rules")
+        except requests.RequestException as e:
+            logging.error(f"Failed to add custom rules: {e}")
 
     return updated_settings
 
