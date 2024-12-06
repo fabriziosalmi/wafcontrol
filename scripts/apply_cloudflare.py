@@ -19,7 +19,7 @@ else:
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
-# Cloudflare WAF settings validation using Pydantic
+# Cloudflare WAF settings validation models
 class WAFRule(BaseModel):
     name: str
     expression: str
@@ -34,13 +34,32 @@ class WAFRule(BaseModel):
         return value
 
 
-class CloudflareWAFSettings(BaseModel):
-    enable_waf: Optional[bool] = True
+class ManagedRule(BaseModel):
+    id: str
+    action: str
+    description: str
+
+
+class IPAccessRule(BaseModel):
+    action: str
+    value: str
+    description: Optional[str] = None
+
+
+class UserAgentRule(BaseModel):
+    action: str
+    value: str
+    description: Optional[str] = None
+
+
+class FirewallSettings(BaseModel):
     sensitivity: Optional[str] = "medium"
     bot_fight_mode: Optional[bool] = True
-    ip_access_rules: Optional[List[str]] = []
-    user_agent_rules: Optional[List[str]] = []
-    custom_rules: Optional[List[WAFRule]] = []
+    ip_access_rules: Optional[List[IPAccessRule]] = []
+    user_agent_rules: Optional[List[UserAgentRule]] = []
+    security_level: Optional[str] = "medium"
+    challenge_ttl: Optional[int] = 3600
+    privacy_pass_support: Optional[bool] = True
 
     @field_validator("sensitivity")
     @classmethod
@@ -49,11 +68,41 @@ class CloudflareWAFSettings(BaseModel):
             raise ValueError("Invalid sensitivity level. Choose one of 'low', 'medium', 'high'.")
         return value
 
+    @field_validator("security_level")
+    @classmethod
+    def validate_security_level(cls, value: str) -> str:
+        valid_levels = {"off", "essentially_off", "low", "medium", "high", "under_attack"}
+        if value not in valid_levels:
+            raise ValueError(f"Invalid security level. Choose one of {valid_levels}")
+        return value
 
-# Config class to hold all zones
+
+class WAFSettings(BaseModel):
+    enable_waf: Optional[bool] = True
+    managed_rules: Optional[List[ManagedRule]] = []
+    custom_rules: Optional[List[WAFRule]] = []
+    firewall_settings: Optional[FirewallSettings] = FirewallSettings()
+
+
+class IPList(BaseModel):
+    name: str
+    description: str
+    ips: List[str]
+
+
+class Zone(BaseModel):
+    id: str
+    domain: str
+    waf: Optional[Dict[str, Any]] = {}
+
+
+class CloudflareConfig(BaseModel):
+    ip_lists: List[IPList]
+    waf: Dict[str, Any]
+
+
 class Config(BaseModel):
-    ip_lists: Dict[str, List[str]] = {}
-    waf: Dict[str, Dict[str, Any]]
+    cloudflare: CloudflareConfig
 
 
 # Function to validate the API token by calling the Cloudflare API
@@ -76,7 +125,7 @@ def validate_api_token(api_token: str) -> bool:
 
 # Retry with exponential backoff for API errors
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def apply_waf_settings(api_token: str, zone_id: str, settings: CloudflareWAFSettings) -> Dict[str, Any]:
+def apply_waf_settings(api_token: str, zone_id: str, settings: WAFSettings) -> Dict[str, Any]:
     logging.info(f"Applying WAF settings for zone {zone_id}...")
 
     headers = {
@@ -103,64 +152,90 @@ def apply_waf_settings(api_token: str, zone_id: str, settings: CloudflareWAFSett
             logging.error(f"API request failed: {e}")
             raise
 
-    if settings.enable_waf:
-        logging.info("WAF is enabled by default.")
+    # Apply Managed Rules
+    if settings.managed_rules:
+        for rule in settings.managed_rules:
+            try:
+                managed_rule_url = f"{base_url}/waf/packages/{rule.id}/rules"
+                payload = {
+                    "mode": rule.action,
+                    "notes": rule.description
+                }
+                result = make_request("PATCH", managed_rule_url, payload)
+                updated_settings[f"managed_rule_{rule.id}"] = result
+                logging.info(f"Successfully configured managed rule {rule.id}")
+            except requests.RequestException as e:
+                logging.error(f"Failed to configure managed rule {rule.id}: {e}")
 
-    # Update Sensitivity
-    if settings.sensitivity:
-        try:
-            sensitivity_url = f"{base_url}/waf/sensitivity"
-            result = make_request("PATCH", sensitivity_url, {"value": settings.sensitivity})
-            updated_settings["sensitivity"] = result
-            logging.info(f"Successfully updated sensitivity to {settings.sensitivity}.")
-        except requests.RequestException as e:
-            logging.error(f"Failed to update WAF sensitivity: {e}")
+    # Apply Firewall Settings
+    if settings.firewall_settings:
+        fw_settings = settings.firewall_settings
 
-    # Update Bot Fight Mode
-    if settings.bot_fight_mode:
-        try:
-            bot_fight_url = f"{base_url}/settings/bot_fight_mode"
-            result = make_request("PATCH", bot_fight_url, {"value": "on"})
-            updated_settings["bot_fight_mode"] = result
-            logging.info("Successfully enabled Bot Fight Mode.")
-        except requests.RequestException as e:
-            logging.error(f"Failed to enable Bot Fight Mode: {e}")
+        # Update Sensitivity
+        if fw_settings.sensitivity:
+            try:
+                sensitivity_url = f"{base_url}/waf/sensitivity"
+                result = make_request("PATCH", sensitivity_url, {"value": fw_settings.sensitivity})
+                updated_settings["sensitivity"] = result
+                logging.info(f"Successfully updated sensitivity to {fw_settings.sensitivity}.")
+            except requests.RequestException as e:
+                logging.error(f"Failed to update WAF sensitivity: {e}")
 
-    # Apply IP Access Rules
-    for ip in settings.ip_access_rules:
-        try:
-            ip_rule_url = f"{base_url}/access_rules/rules"
-            payload = {
-                "mode": "block",
-                "configuration": {
-                    "target": "ip",
-                    "value": ip
-                },
-                "notes": "Blocking IP based on configuration"
-            }
-            result = make_request("POST", ip_rule_url, payload)
-            updated_settings[f"ip_access_rule_{ip}"] = result
-            logging.info(f"Successfully added IP access rule for {ip}.")
-        except requests.RequestException as e:
-            logging.error(f"Failed to add IP access rule for {ip}: {e}")
+        # Update Security Level
+        if fw_settings.security_level:
+            try:
+                security_level_url = f"{base_url}/settings/security_level"
+                result = make_request("PATCH", security_level_url, {"value": fw_settings.security_level})
+                updated_settings["security_level"] = result
+                logging.info(f"Successfully updated security level to {fw_settings.security_level}.")
+            except requests.RequestException as e:
+                logging.error(f"Failed to update security level: {e}")
 
-    # Apply User Agent Rules
-    for user_agent in settings.user_agent_rules:
-        try:
-            ua_rule_url = f"{base_url}/access_rules/rules"
-            payload = {
-                "mode": "block",
-                "configuration": {
-                    "target": "ua",
-                    "value": user_agent
-                },
-                "notes": "Blocking User-Agent based on configuration"
-            }
-            result = make_request("POST", ua_rule_url, payload)
-            updated_settings[f"user_agent_rule_{user_agent}"] = result
-            logging.info(f"Successfully added User-Agent rule for {user_agent}.")
-        except requests.RequestException as e:
-            logging.error(f"Failed to add User-Agent rule for {user_agent}: {e}")
+        # Update Bot Fight Mode
+        if fw_settings.bot_fight_mode:
+            try:
+                bot_fight_url = f"{base_url}/settings/bot_fight_mode"
+                result = make_request("PATCH", bot_fight_url, {"value": "on"})
+                updated_settings["bot_fight_mode"] = result
+                logging.info("Successfully enabled Bot Fight Mode.")
+            except requests.RequestException as e:
+                logging.error(f"Failed to enable Bot Fight Mode: {e}")
+
+        # Apply IP Access Rules
+        for rule in fw_settings.ip_access_rules:
+            try:
+                ip_rule_url = f"{base_url}/access_rules/rules"
+                payload = {
+                    "mode": rule.action,
+                    "configuration": {
+                        "target": "ip",
+                        "value": rule.value
+                    },
+                    "notes": rule.description or ""
+                }
+                result = make_request("POST", ip_rule_url, payload)
+                updated_settings[f"ip_access_rule_{rule.value}"] = result
+                logging.info(f"Successfully added IP access rule for {rule.value}.")
+            except requests.RequestException as e:
+                logging.error(f"Failed to add IP access rule for {rule.value}: {e}")
+
+        # Apply User Agent Rules
+        for rule in fw_settings.user_agent_rules:
+            try:
+                ua_rule_url = f"{base_url}/access_rules/rules"
+                payload = {
+                    "mode": rule.action,
+                    "configuration": {
+                        "target": "ua",
+                        "value": rule.value
+                    },
+                    "notes": rule.description or ""
+                }
+                result = make_request("POST", ua_rule_url, payload)
+                updated_settings[f"user_agent_rule_{rule.value}"] = result
+                logging.info(f"Successfully added User-Agent rule for {rule.value}.")
+            except requests.RequestException as e:
+                logging.error(f"Failed to add User-Agent rule for {rule.value}: {e}")
 
     # Apply Custom WAF Rules
     if settings.custom_rules:
@@ -201,10 +276,8 @@ def main(config_path: str):
         sys.exit(1)
 
     try:
-        # Update the config data structure to match the expected format
-        if 'waf' not in config_data:
-            config_data['waf'] = {}
         config = Config.model_validate(config_data)
+        cloudflare_config = config.cloudflare
     except ValidationError as e:
         logging.error(f"Invalid configuration file: {e}")
         sys.exit(1)
@@ -220,10 +293,10 @@ def main(config_path: str):
         sys.exit(1)
 
     # Get default WAF settings
-    default_waf_settings = config.waf.get('default', {})
+    default_waf_settings = cloudflare_config.waf.get('default', {})
 
     # Process zones
-    zones = config.waf.get('zones', [])
+    zones = cloudflare_config.waf.get('zones', [])
     if not zones:
         logging.warning("No zones found in configuration.")
         return
@@ -240,7 +313,7 @@ def main(config_path: str):
         try:
             # Merge default and zone-specific settings
             merged_settings = {**default_waf_settings, **zone_settings}
-            settings = CloudflareWAFSettings.model_validate(merged_settings)
+            settings = WAFSettings.model_validate(merged_settings)
 
             logging.info(f"Processing zone {zone_id} for domain {fqdn}...")
             apply_waf_settings(api_token, zone_id, settings)
