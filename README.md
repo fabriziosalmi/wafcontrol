@@ -2,9 +2,6 @@
 
 Welcome to **WAFcontrol**, a powerful, scalable, and fully automated solution for managing Cloudflare Web Application Firewall (WAF) rules across multiple zones. This tool allows you to define default configurations and customize WAF settings for individual domains, all while leveraging Cloudflare’s robust API to enhance your security posture.
 
-> [!NOTE]
-> Current code will not work as expected, this will be fixed as soon as possible.
-
 ## 🚀 Project Summary
 
 **WAFcontrol** provides a centralized and automated solution to manage WAF settings for multiple Cloudflare domains using a YAML configuration file. You can define WAF rules, IP access lists, bot protection settings, and sensitivity levels in a declarative manner, and easily apply these settings using a single script.
