@@ -29,6 +29,6 @@ jobs:
     - name: Apply WAF settings
       run: |
         set -e # Ensure the script exits on any error
-        python scripts/apply_cloudflare.py --config config.yaml
+        python scripts/apply_cloudflare.py --config config/cloudflare.yaml
       env:
         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
