@@ -17,21 +17,6 @@ log_format = '::%(levelname)s :: %(message)s' if GITHUB_ACTIONS else '%(asctime)
 logging.basicConfig(level=logging.INFO, format=log_format)
 
 # Model definitions
-class WAFRule(BaseModel):
-    name: str
-    expression: str
-    action: str
-    description: Optional[str] = None
-
-    @field_validator('action')
-    @classmethod
-    def validate_rule_action(cls, value: str) -> str:
-        valid_actions = {"block", "challenge", "allow", "log", "js_challenge"}
-        if value not in valid_actions:
-            raise ValueError(f"Invalid action. Choose one of {valid_actions}")
-        return value
-
-
 class FirewallSettings(BaseModel):
     security_level: Optional[str] = "medium"
 
@@ -45,12 +30,10 @@ class FirewallSettings(BaseModel):
 
 
 class WAFSettings(BaseModel):
-    custom_rules: Optional[List[WAFRule]] = []
     firewall_settings: Optional[FirewallSettings] = None
 
 
 class CloudflareConfig(BaseModel):
-    ip_lists: List[Dict[str, Any]]
     waf: Dict[str, Any]
 
 
@@ -107,32 +90,8 @@ class CloudflareAPI:
             return False
 
 
-def process_ip_lists(config_ip_lists: List[Dict[str, Any]]) -> Dict[str, str]:
-    """Convert IP lists to expressions"""
-    ip_list_map = {}
-    for ip_list in config_ip_lists:
-        if isinstance(ip_list, dict) and 'name' in ip_list and 'ips' in ip_list:
-            ips = ip_list['ips']
-            if isinstance(ips, list):
-                ips_str = ','.join(f'"{ip}"' for ip in ips)
-                ip_list_map[f"${ip_list['name']}"] = f"{{{ips_str}}}"
-            else:
-                logging.warning(f"Invalid IPs format for IP list {ip_list['name']}")
-    return ip_list_map
-
-
-def replace_ip_list_variables(expression: str, ip_list_map: Dict[str, str]) -> str:
-    """Replace IP list variables in expressions"""
-    result = expression
-    for var_name, ip_set in ip_list_map.items():
-        if var_name in result:
-            result = result.replace(var_name, ip_set)
-            logging.info(f"Replaced IP list variable {var_name} in expression")
-    return result
-
-
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def apply_waf_settings(api: CloudflareAPI, zone_id: str, settings: WAFSettings, ip_list_map: Dict[str, str]) -> Dict[str, Any]:
+def apply_waf_settings(api: CloudflareAPI, zone_id: str, settings: WAFSettings) -> Dict[str, Any]:
     logging.info(f"Applying WAF settings for zone {zone_id}...")
     base_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}"
     updated_settings = {}
@@ -151,31 +110,6 @@ def apply_waf_settings(api: CloudflareAPI, zone_id: str, settings: WAFSettings, 
                 logging.info(f"Successfully updated security level to {settings.firewall_settings.security_level}")
         except Exception as e:
             logging.error(f"Failed to update security level: {e}")
-
-    # Apply Firewall Rules
-    if settings.custom_rules:
-        try:
-            rules = []
-            for rule in settings.custom_rules:
-                processed_expression = replace_ip_list_variables(rule.expression, ip_list_map)
-                rule_data = {
-                    "action": rule.action,
-                    "expression": processed_expression,
-                    "description": rule.description or "",
-                    "enabled": True
-                }
-                rules.append(rule_data)
-
-            if rules:
-                create_url = f"{base_url}/firewall/rules"
-                result = api.make_request("POST", create_url, {"rules": rules})
-                if result.get('success'):
-                    updated_settings["firewall_rules"] = result
-                    logging.info(f"Successfully added {len(rules)} firewall rules")
-                else:
-                    logging.error(f"Failed to add firewall rules: {result.get('errors', [])}")
-        except Exception as e:
-            logging.error(f"Failed to add firewall rules: {e}")
 
     return updated_settings
 
@@ -214,15 +148,6 @@ def main(config_path: str):
         logging.error("No Cloudflare configuration found in config file")
         sys.exit(1)
 
-    # Process IP lists
-    ip_lists = cloudflare_config.get('ip_lists', [])
-    if not isinstance(ip_lists, list):
-        logging.error("IP lists in configuration file is not a list")
-        sys.exit(1)
-
-    ip_list_map = process_ip_lists(ip_lists)
-    logging.info(f"Processed {len(ip_list_map)} IP lists")
-
     # Process WAF configuration
     waf_config = cloudflare_config.get('waf', {})
     default_settings = waf_config.get('default', {})
@@ -245,17 +170,9 @@ def main(config_path: str):
         try:
             # Merge default and zone-specific settings
             merged_settings = {**default_settings, **zone_settings}
-            
-            # Convert any rule expressions that use IP lists
-            if 'custom_rules' in merged_settings:
-                for rule in merged_settings['custom_rules']:
-                    if 'expression' in rule:
-                        rule['expression'] = replace_ip_list_variables(rule['expression'], ip_list_map)
-            
             settings = WAFSettings.model_validate(merged_settings)
             logging.info(f"Processing zone {domain} ({zone_id})...")
-            apply_waf_settings(api, zone_id, settings, ip_list_map)
-            
+            apply_waf_settings(api, zone_id, settings)
         except Exception as e:
             logging.error(f"Failed to process zone {domain} ({zone_id}): {e}")
             continue
