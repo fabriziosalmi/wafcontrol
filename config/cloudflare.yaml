@@ -65,8 +65,8 @@ cloudflare:
         privacy_pass_support: true  # Allow users with a Privacy Pass to bypass challenge
 
     zones:
-      - id: "1234567890abcdef1234567890abcdef"
-        domain: "example.com"
+      - id: "b441db6e139659910adc1155990213e2"
+        domain: "freesubnet.com"
         # This zone inherits WAF settings from default except those explicitly defined here
         waf:
           managed_rules:
@@ -94,7 +94,7 @@ cloudflare:
 
             security_level: "under_attack"  # Set higher security level during an attack
 
-      - id: "0987654321fedcba0987654321fedcba"
-        domain: "anotherdomain.com"
-        # This zone inherits all WAF settings from default
-        waf: {}
+#      - id: "0987654321fedcba0987654321fedcba"
+#        domain: "anotherdomain.com"
+#        # This zone inherits all WAF settings from default
+#        waf: {}
