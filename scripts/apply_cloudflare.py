@@ -182,7 +182,68 @@ def apply_waf_settings(api: CloudflareAPI, zone_id: str, settings: WAFSettings) 
 
 
 def main(config_path: str):
-    # [Previous main function code remains the same]
+    # Validate config file exists
+    if not os.path.exists(config_path):
+        logging.error(f"Configuration file not found: {config_path}")
+        sys.exit(1)
+
+    try:
+        with open(config_path, 'r') as file:
+            config_data = yaml.safe_load(file)
+    except yaml.YAMLError as e:
+        logging.error(f"Failed to parse YAML configuration file: {e}")
+        sys.exit(1)
+    except Exception as e:
+        logging.error(f"Failed to read configuration file: {e}")
+        sys.exit(1)
+
+    # Get Cloudflare API token
+    api_token = os.getenv('CLOUDFLARE_API_TOKEN')
+    if not api_token:
+        logging.error("Cloudflare API token not found in environment variables.")
+        sys.exit(1)
+
+    # Initialize API client
+    api = CloudflareAPI(api_token)
+    if not api.validate_token():
+        logging.error("API token validation failed. Exiting.")
+        sys.exit(1)
+
+    # Process configuration
+    cloudflare_config = config_data.get('cloudflare', {})
+    if not cloudflare_config:
+        logging.error("No Cloudflare configuration found in config file")
+        sys.exit(1)
+
+    # Process WAF configuration
+    waf_config = cloudflare_config.get('waf', {})
+    default_settings = waf_config.get('default', {})
+    zones = waf_config.get('zones', [])
+
+    if not zones:
+        logging.warning("No zones found in configuration")
+        return
+
+    # Process each zone
+    for zone in zones:
+        zone_id = zone.get('id')
+        domain = zone.get('domain')
+        zone_settings = zone.get('waf', {})
+
+        if not zone_id or not domain:
+            logging.error("Zone ID or domain not found for a zone")
+            continue
+
+        try:
+            # Merge default and zone-specific settings
+            merged_settings = {**default_settings, **zone_settings}
+            settings = WAFSettings.model_validate(merged_settings)
+            logging.info(f"Processing zone {domain} ({zone_id})...")
+            apply_waf_settings(api, zone_id, settings)
+        except Exception as e:
+            logging.error(f"Failed to process zone {domain} ({zone_id}): {e}")
+            continue
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Apply Cloudflare WAF settings from a configuration file.")
