@@ -1,30 +1,36 @@
 # 🌐 WAFcontrol (Cloudflare WAF Settings Automation)
 
-Welcome to **WAFcontrol**, a streamlined solution for managing Cloudflare Web Application Firewall (WAF) security levels across multiple zones. This tool allows you to manage security levels for individual domains through a simple YAML configuration.
+Welcome to **WAFcontrol**, a streamlined solution for managing Cloudflare Web Application Firewall (WAF) security settings across multiple zones. This tool allows you to manage various security settings for individual domains through a simple YAML configuration.
 
 ## 🚀 Project Summary
 
-**WAFcontrol** provides a centralized and automated solution to manage security levels for multiple Cloudflare domains using a YAML configuration file. You can define default security settings and customize them for individual domains, all managed through GitHub Actions automation.
+**WAFcontrol** provides a centralized and automated solution to manage security settings for multiple Cloudflare domains using a YAML configuration file. You can define default security settings and customize them for individual domains, all managed through GitHub Actions automation.
 
 ## ✨ Features Overview
 
 ### Core Features
-- **Multi-Zone Support**: Manage security settings across multiple domains using a unified configuration
-- **Declarative YAML Configuration**: Simplify security management with a human-readable YAML file
-- **Free Plan Compatibility**: Works with Cloudflare's free plan
-- **GitHub Actions Integration**: Built-in automation support
+- **Multi-Zone Support**: Manage security settings across multiple domains using a unified configuration.
+- **Declarative YAML Configuration**: Simplify security management with a human-readable YAML file.
+- **Free Plan Compatibility**: Works with Cloudflare's free plan.
+- **GitHub Actions Integration**: Built-in automation support.
 
 ### Security Features Managed
-- **Security Level Control**: Set security levels for each zone
-  - Available options: `off`, `essentially_off`, `low`, `medium`, `high`, `under_attack`
-- **Default Settings**: Define default security levels that apply to all zones
-- **Zone-Specific Overrides**: Customize security levels for individual domains
+- **Security Level Control**: Set security levels for each zone.
+    - Available options: `off`, `essentially_off`, `low`, `medium`, `high`, `under_attack`.
+- **Challenge Passage**: Configure how Cloudflare responds to potential threats.
+    - Available options: `default`, `bypass`, `challenge`.
+- **Browser Integrity Check**: Enable or disable browser integrity checks.
+    - Available options: `on`, `off`.
+- **Automatic HTTPS Rewrites**: Enable or disable automatic HTTPS rewrites.
+    - Available options: `on`, `off`.
+- **Default Settings**: Define default security settings that apply to all zones.
+- **Zone-Specific Overrides**: Customize security settings for individual domains.
 
 ## 🛠️ How It Works
 
-1. **Configuration**: Define security levels in a YAML file, with common settings under `default` and zone-specific overrides
-2. **Execution**: The script applies the settings using Cloudflare's API and logs the results
-3. **Automation**: Runs automatically through GitHub Actions on schedule or manual trigger
+1.  **Configuration**: Define security settings in a YAML file, with common settings under `default` and zone-specific overrides.
+2.  **Execution**: The script applies the settings using Cloudflare's API and logs the results.
+3.  **Automation**: Runs automatically through GitHub Actions on schedule or manual trigger.
 
 ## 📄 YAML Configuration Example
 
@@ -34,23 +40,29 @@ cloudflare:
     default:
       firewall_settings:
         security_level: "high"
+        challenge_passage: "default"
+        browser_integrity_check: "on"
+        automatic_https_rewrites: "on"
     zones:
       - id: "your-zone-id"
         domain: "your-domain.com"
         waf:
           firewall_settings:
             security_level: "under_attack"
+            challenge_passage: "bypass" #override default
+            browser_integrity_check: "off" #override default
+            automatic_https_rewrites: "on" #no override
 ```
 
 ## 🏗️ Setup Instructions
 
 ### 1. Prerequisites
-- Cloudflare Account with API token
-- GitHub repository
-- Python 3.9 or higher
+- Cloudflare Account with API token.
+- GitHub repository.
+- Python 3.9 or higher.
 
 Required API token permissions:
-- Zone Settings:Edit
+- Zone Settings: Edit
 
 ### 2. Installation
 
@@ -69,19 +81,19 @@ pip install pydantic requests PyYAML tenacity
 
 1. Create Cloudflare API token:
    - Go to Cloudflare Dashboard → Profile → API Tokens
-   - Create token with `Zone Settings:Edit` permission
+   - Create a token with `Zone Settings:Edit` permission
    - Add token to GitHub repository secrets as `CLOUDFLARE_API_TOKEN`
 
 2. Configure your zones:
-   - Edit `config/cloudflare.yaml` with your zone IDs and domains
-   - Set desired security levels for each zone
+   - Edit `config/cloudflare.yaml` with your zone IDs and domains.
+   - Set desired security settings for each zone, you can use the default section and override settings for each zone.
 
 ### 4. GitHub Actions Setup
 
 The workflow runs automatically:
-- On push to main branch (affecting relevant files)
-- Daily at midnight UTC
-- Manual trigger through GitHub Actions UI
+- On push to the `main` branch (affecting relevant files).
+- Daily at midnight UTC.
+- Manual trigger through GitHub Actions UI.
 
 Workflow file `.github/workflows/waf-control.yml`:
 ```yaml
@@ -130,18 +142,21 @@ jobs:
 ::INFO :: Processing zone example.com (zone-id)...
 ::INFO :: Applying WAF settings for zone zone-id...
 ::INFO :: Successfully updated security level to under_attack
+::INFO :: Successfully updated challenge passage to bypass
+::INFO :: Successfully updated browser integrity check to off
+::INFO :: Successfully updated automatic https rewrites to on
 ```
 
 ## 🛡️ Security Considerations
 
-- Never commit API tokens to the repository
-- Use GitHub Secrets for sensitive information
-- Use environment protection rules for production deployments
-- Double-check zone IDs and domains before deployment
+- Never commit API tokens to the repository.
+- Use GitHub Secrets for sensitive information.
+- Use environment protection rules for production deployments.
+- Double-check zone IDs and domains before deployment.
 
 ## 🔧 Supported Zones
 
-You can apply the security settings to any Cloudflare zone, including free domains. The security level control works with all Cloudflare plans.
+You can apply the security settings to any Cloudflare zone, including free domains. The security settings control works with all Cloudflare plans.
 
 ## 👨‍💻 Contributing
 
@@ -157,15 +172,15 @@ Guidelines for contributing:
 
 Common issues and solutions:
 
-1. **API Token Issues**:
-   - Ensure the token has `Zone Settings:Edit` permission
-   - Verify the token is correctly added to GitHub Secrets
-   - Check the token is not expired
+1.  **API Token Issues**:
+    - Ensure the token has `Zone Settings:Edit` permission.
+    - Verify the token is correctly added to GitHub Secrets.
+    - Check the token is not expired.
 
-2. **Configuration Issues**:
-   - Verify zone IDs are correct
-   - Ensure YAML syntax is valid
-   - Check security level values are valid options
+2.  **Configuration Issues**:
+    - Verify zone IDs are correct.
+    - Ensure YAML syntax is valid.
+    - Check security level, challenge passage, browser integrity check, and automatic HTTPS rewrites values are valid options.
 
 ## 📄 License
 
@@ -180,6 +195,6 @@ If you encounter any issues or need help:
 
 ## 🙏 Acknowledgments
 
-- Thanks to Cloudflare for their excellent API
-- Contributors who have helped improve this tool
-- The open-source community for inspiration and support
+- Thanks to Cloudflare for their excellent API.
+- Contributors who have helped improve this tool.
+- The open-source community for inspiration and support.
