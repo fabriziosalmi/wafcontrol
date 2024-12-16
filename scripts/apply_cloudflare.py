@@ -17,9 +17,9 @@ logging.basicConfig(level=logging.INFO, format=log_format)
 # Model definitions
 class FirewallSettings(BaseModel):
     security_level: Optional[str] = "medium"
-    challenge_passage: Optional[str] = "default"
     browser_integrity_check: Optional[str] = "on"
     automatic_https_rewrites: Optional[str] = "on"
+
 
     @field_validator("security_level")
     @classmethod
@@ -27,14 +27,6 @@ class FirewallSettings(BaseModel):
         valid_levels = {"off", "essentially_off", "low", "medium", "high", "under_attack"}
         if value not in valid_levels:
             raise ValueError(f"Invalid security level. Choose one of {valid_levels}")
-        return value
-    
-    @field_validator("challenge_passage")
-    @classmethod
-    def validate_challenge_passage(cls, value: str) -> str:
-        valid_modes = {"default", "bypass", "challenge"}
-        if value not in valid_modes:
-            raise ValueError(f"Invalid challenge passage mode. Choose one of {valid_modes}")
         return value
 
     @field_validator("browser_integrity_check")
@@ -54,17 +46,28 @@ class FirewallSettings(BaseModel):
         return value
 
 
+class WAFRule(BaseModel):
+    description: str
+    expression: str
+    action: str
+
+    @field_validator("action")
+    @classmethod
+    def validate_action(cls, value: str) -> str:
+        valid_actions = {"block", "challenge", "allow", "log", "bypass"}
+        if value not in valid_actions:
+            raise ValueError(f"Invalid WAF rule action. Choose one of {valid_actions}")
+        return value
+
 class WAFSettings(BaseModel):
     firewall_settings: Optional[FirewallSettings] = None
-
+    rules: Optional[List[WAFRule]] = None
 
 class CloudflareConfig(BaseModel):
     waf: Dict[str, Any]
 
-
 class Config(BaseModel):
     cloudflare: CloudflareConfig
-
 
 class CloudflareAPI:
     def __init__(self, api_token: str):
@@ -84,7 +87,7 @@ class CloudflareAPI:
                 json=json_data,
                 timeout=30
             )
-            
+
             try:
                 response_data = response.json()
             except json.JSONDecodeError:
@@ -114,7 +117,6 @@ class CloudflareAPI:
             logging.error(f"Token validation failed: {e}")
             return False
 
-
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def apply_waf_settings(api: CloudflareAPI, zone_id: str, settings: WAFSettings) -> Dict[str, Any]:
     logging.info(f"Applying WAF settings for zone {zone_id}...")
@@ -135,21 +137,7 @@ def apply_waf_settings(api: CloudflareAPI, zone_id: str, settings: WAFSettings) 
                 logging.info(f"Successfully updated security level to {settings.firewall_settings.security_level}")
         except Exception as e:
             logging.error(f"Failed to update security level: {e}")
-    
-    # Apply Challenge Passage
-    if settings.firewall_settings and settings.firewall_settings.challenge_passage:
-        try:
-            challenge_url = f"{base_url}/settings/challenge_passage"
-            result = api.make_request(
-                "PATCH",
-                challenge_url,
-                {"value": settings.firewall_settings.challenge_passage}
-            )
-            if result.get('success'):
-                updated_settings["challenge_passage"] = result
-                logging.info(f"Successfully updated challenge passage to {settings.firewall_settings.challenge_passage}")
-        except Exception as e:
-             logging.error(f"Failed to update challenge passage: {e}")
+
 
     # Apply Browser Integrity Check
     if settings.firewall_settings and settings.firewall_settings.browser_integrity_check:
@@ -180,8 +168,83 @@ def apply_waf_settings(api: CloudflareAPI, zone_id: str, settings: WAFSettings) 
                 logging.info(f"Successfully updated automatic https rewrites to {settings.firewall_settings.automatic_https_rewrites}")
         except Exception as e:
              logging.error(f"Failed to update automatic https rewrites: {e}")
-    
+
+    # Apply Custom WAF Rules
+    if settings.rules:
+         updated_settings["rules"] = apply_waf_rules(api, zone_id, settings.rules)
+
+
     return updated_settings
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def apply_waf_rules(api: CloudflareAPI, zone_id: str, rules: List[WAFRule]) -> List[Dict[str, Any]]:
+    logging.info(f"Applying WAF rules for zone {zone_id}...")
+    base_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/rulesets/phases/http_request_firewall_custom/rules"
+    results = []
+
+    for rule in rules:
+       try:
+            # Find existing rule with the same description:
+            existing_rule_id = find_existing_rule_id(api, base_url, rule.description)
+
+            if existing_rule_id:
+                # Update the rule
+                result = api.make_request(
+                    "PUT",
+                     f"{base_url}/{existing_rule_id}",
+                     {"description": rule.description,
+                     "expression": rule.expression,
+                     "action": rule.action
+                     }
+                )
+                if result.get("success"):
+                    logging.info(f"Successfully updated WAF rule: {rule.description}")
+                    results.append(result)
+                else:
+                    logging.error(f"Failed to update WAF rule: {rule.description}")
+                    results.append(result)
+
+            else:
+                # Create new rule
+                result = api.make_request(
+                    "POST",
+                     base_url,
+                     {"description": rule.description,
+                      "expression": rule.expression,
+                      "action": rule.action
+                    }
+                )
+                if result.get("success"):
+                   logging.info(f"Successfully created WAF rule: {rule.description}")
+                   results.append(result)
+                else:
+                   logging.error(f"Failed to create WAF rule: {rule.description}")
+                   results.append(result)
+
+       except Exception as e:
+            logging.error(f"Failed to create/update rule {rule.description}: {e}")
+            results.append({"success": False, "errors": [{"message": str(e)}]})
+    return results
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def find_existing_rule_id(api: CloudflareAPI, base_url:str, description: str) -> Optional[str]:
+    try:
+        response = api.make_request("GET", base_url)
+        if response.get("success"):
+            rules = response.get("result", [])
+            for rule in rules:
+               if rule.get("description") == description:
+                   return rule.get("id")
+        else:
+            logging.error(f"Error fetching rules {response}")
+            return None
+
+    except Exception as e:
+        logging.error(f"Error finding existing rule: {e}")
+        return None
+
+    return None
+
 
 
 def main(config_path: str):
@@ -246,7 +309,6 @@ def main(config_path: str):
         except Exception as e:
             logging.error(f"Failed to process zone {domain} ({zone_id}): {e}")
             continue
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Apply Cloudflare WAF settings from a configuration file.")
