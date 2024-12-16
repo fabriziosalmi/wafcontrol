@@ -3,9 +3,15 @@ cloudflare:
     default:
       firewall_settings:
         security_level: "high"
+        challenge_passage: "default"
+        browser_integrity_check: "on"
+        automatic_https_rewrites: "on"
     zones:
       - id: "b441db6e139659910adc1155990213e2"
         domain: "freesubnet.com"
         waf:
           firewall_settings:
             security_level: "under_attack"
+            challenge_passage: "bypass" #override default
+            browser_integrity_check: "off" #override default
+            automatic_https_rewrites: "on" #no override
