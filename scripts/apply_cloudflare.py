@@ -8,6 +8,7 @@ from typing import List, Dict, Optional, Any
 from pydantic import BaseModel, field_validator, ValidationError
 from tenacity import retry, stop_after_attempt, wait_exponential
 import argparse
+import time
 
 # Configure logging
 GITHUB_ACTIONS = os.getenv('GITHUB_ACTIONS') == 'true'
@@ -231,7 +232,6 @@ def apply_waf_rules(api: CloudflareAPI, zone_id: str, rules: List[WAFRule]) -> L
             results.append({"success": False, "errors": [{"message": str(e)}]})
     return results
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def get_ruleset_id(api: CloudflareAPI, zone_id: str) -> Optional[str]:
     base_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/rulesets"
     try:
@@ -260,27 +260,31 @@ def create_default_ruleset(api: CloudflareAPI, zone_id:str) -> Optional[str]:
             "expression": "true",
             "action": "log"
         }
-    # Get the Ruleset ID
-    ruleset_id = get_ruleset_id(api, zone_id)
-    if not ruleset_id:
-        logging.error(f"Failed to get ruleset ID in create_default_ruleset for zone {zone_id}")
-        return None
     try:
+        # Get the Ruleset ID
+        ruleset_id = get_ruleset_id(api, zone_id)
+        if not ruleset_id:
+            logging.error(f"Failed to get ruleset ID in create_default_ruleset for zone {zone_id}")
+            return None
+
         # Create a default rule in the ruleset to force its creation if it doesn't exist:
         response = api.make_request("POST", f"{base_url}/{ruleset_id}/rules", json_data=temp_rule)
 
         if response.get("success"):
             # Now that the ruleset was created we need to delete the temporary rule
             rule_id = response.get("result").get("id")
+            time.sleep(5)
             delete_result = api.make_request("DELETE", f"https://api.cloudflare.com/client/v4/zones/{zone_id}/rulesets/{ruleset_id}/rules/{rule_id}")
             if delete_result.get("success"):
                 logging.info(f"Temporary rule deleted succesfully from zone: {zone_id}")
                 return ruleset_id
             else:
                 logging.error(f"Error deleting temporary rule: {delete_result}")
+                logging.error(f"Response: {delete_result}")
                 return None
         else:
             logging.error(f"Error creating default ruleset: {response}")
+            logging.error(f"Response: {response}")
             return None
 
     except Exception as e:
