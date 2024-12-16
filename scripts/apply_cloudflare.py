@@ -181,7 +181,7 @@ def apply_waf_rules(api: CloudflareAPI, zone_id: str, rules: List[WAFRule]) -> L
     logging.info(f"Applying WAF rules for zone {zone_id}...")
     ruleset_id = get_ruleset_id(api, zone_id)
     if not ruleset_id:
-        logging.error(f"Failed to retrieve WAF ruleset id for zone {zone_id}")
+        logging.error(f"Failed to retrieve WAF ruleset id for zone {zone_id}, WAF rules will not be applied")
         return []
     
     base_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/rulesets/{ruleset_id}/rules"
@@ -243,6 +243,7 @@ def get_ruleset_id(api: CloudflareAPI, zone_id: str) -> Optional[str]:
                      return ruleset.get("id")
         else:
             logging.error(f"Error fetching rulesets: {response}")
+            logging.error(f"Response: {response}")
             return None
     except Exception as e:
         logging.error(f"Error getting ruleset id {e}")
