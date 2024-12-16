@@ -244,13 +244,13 @@ def get_ruleset_id(api: CloudflareAPI, zone_id: str) -> Optional[str]:
         else:
             logging.error(f"Error fetching rulesets: {response}")
             logging.error(f"Response: {response}")
-            return None
-        
+            
     except Exception as e:
         logging.error(f"Error getting ruleset id {e}")
         return None
-    logging.info(f"Ruleset not found for zone {zone_id}")
+    logging.info(f"Ruleset not found for zone {zone_id}, attempting to create it.")
     return create_default_ruleset(api, zone_id)
+
 
 def create_default_ruleset(api: CloudflareAPI, zone_id:str) -> Optional[str]:
     base_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/rulesets"
@@ -260,14 +260,25 @@ def create_default_ruleset(api: CloudflareAPI, zone_id:str) -> Optional[str]:
             "action": "log"
         }
     try:
+        # Create ruleset
+        create_ruleset_response = api.make_request("POST", base_url, json_data={
+            "name": "Default Ruleset for WAFcontrol",
+            "description": "Default ruleset created by WAFControl",
+            "phase": "http_request_firewall_custom"
+        })
+        if not create_ruleset_response.get("success"):
+            logging.error(f"Failed to create WAF ruleset: {create_ruleset_response}")
+            logging.error(f"Response: {create_ruleset_response}")
+            return None
+        ruleset_id = create_ruleset_response.get("result").get("id")
+
         # Create a default rule in the ruleset to force its creation if it doesn't exist:
-        logging.info(f"Attempting to create default ruleset for {zone_id}")
-        ruleset_response = api.make_request("POST", f"{base_url}/phases/http_request_firewall_custom/rules", json_data=temp_rule)
-        if ruleset_response.get("success"):
+        logging.info(f"Ruleset {ruleset_id} created, attempting to create temporary rule for {zone_id}")
+        response = api.make_request("POST", f"{base_url}/{ruleset_id}/rules", json_data=temp_rule)
+        if response.get("success"):
             # Now that the ruleset was created we need to delete the temporary rule
-            ruleset_id = ruleset_response.get("result").get("ruleset_id")
-            rule_id = ruleset_response.get("result").get("id")
-            logging.info(f"Ruleset {ruleset_id} created for zone: {zone_id} deleting temporary rule: {rule_id}")
+            rule_id = response.get("result").get("id")
+            logging.info(f"Temporary rule {rule_id} created for ruleset {ruleset_id} for zone: {zone_id}, deleting it...")
             time.sleep(5)
             delete_result = api.make_request("DELETE", f"https://api.cloudflare.com/client/v4/zones/{zone_id}/rulesets/{ruleset_id}/rules/{rule_id}")
             if delete_result.get("success"):
@@ -278,8 +289,8 @@ def create_default_ruleset(api: CloudflareAPI, zone_id:str) -> Optional[str]:
                 logging.error(f"Response: {delete_result}")
                 return None
         else:
-            logging.error(f"Error creating default ruleset: {ruleset_response}")
-            logging.error(f"Response: {ruleset_response}")
+            logging.error(f"Error creating temporary rule: {response}")
+            logging.error(f"Response: {response}")
             return None
 
     except Exception as e:
