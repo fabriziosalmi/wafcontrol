@@ -17,6 +17,9 @@ logging.basicConfig(level=logging.INFO, format=log_format)
 # Model definitions
 class FirewallSettings(BaseModel):
     security_level: Optional[str] = "medium"
+    challenge_passage: Optional[str] = "default"
+    browser_integrity_check: Optional[str] = "on"
+    automatic_https_rewrites: Optional[str] = "on"
 
     @field_validator("security_level")
     @classmethod
@@ -24,6 +27,30 @@ class FirewallSettings(BaseModel):
         valid_levels = {"off", "essentially_off", "low", "medium", "high", "under_attack"}
         if value not in valid_levels:
             raise ValueError(f"Invalid security level. Choose one of {valid_levels}")
+        return value
+    
+    @field_validator("challenge_passage")
+    @classmethod
+    def validate_challenge_passage(cls, value: str) -> str:
+        valid_modes = {"default", "bypass", "challenge"}
+        if value not in valid_modes:
+            raise ValueError(f"Invalid challenge passage mode. Choose one of {valid_modes}")
+        return value
+
+    @field_validator("browser_integrity_check")
+    @classmethod
+    def validate_browser_integrity_check(cls, value: str) -> str:
+        valid_values = {"on", "off"}
+        if value not in valid_values:
+            raise ValueError(f"Invalid browser integrity check value. Choose one of {valid_values}")
+        return value
+
+    @field_validator("automatic_https_rewrites")
+    @classmethod
+    def validate_automatic_https_rewrites(cls, value: str) -> str:
+        valid_values = {"on", "off"}
+        if value not in valid_values:
+            raise ValueError(f"Invalid automatic https rewrites value. Choose one of {valid_values}")
         return value
 
 
@@ -108,7 +135,52 @@ def apply_waf_settings(api: CloudflareAPI, zone_id: str, settings: WAFSettings) 
                 logging.info(f"Successfully updated security level to {settings.firewall_settings.security_level}")
         except Exception as e:
             logging.error(f"Failed to update security level: {e}")
+    
+    # Apply Challenge Passage
+    if settings.firewall_settings and settings.firewall_settings.challenge_passage:
+        try:
+            challenge_url = f"{base_url}/settings/challenge_passage"
+            result = api.make_request(
+                "PATCH",
+                challenge_url,
+                {"value": settings.firewall_settings.challenge_passage}
+            )
+            if result.get('success'):
+                updated_settings["challenge_passage"] = result
+                logging.info(f"Successfully updated challenge passage to {settings.firewall_settings.challenge_passage}")
+        except Exception as e:
+             logging.error(f"Failed to update challenge passage: {e}")
 
+    # Apply Browser Integrity Check
+    if settings.firewall_settings and settings.firewall_settings.browser_integrity_check:
+        try:
+            bic_url = f"{base_url}/settings/browser_check"
+            result = api.make_request(
+                "PATCH",
+                bic_url,
+                {"value": settings.firewall_settings.browser_integrity_check}
+            )
+            if result.get('success'):
+                updated_settings["browser_integrity_check"] = result
+                logging.info(f"Successfully updated browser integrity check to {settings.firewall_settings.browser_integrity_check}")
+        except Exception as e:
+            logging.error(f"Failed to update browser integrity check: {e}")
+
+    # Apply Automatic HTTPS Rewrites
+    if settings.firewall_settings and settings.firewall_settings.automatic_https_rewrites:
+        try:
+            https_url = f"{base_url}/settings/automatic_https_rewrites"
+            result = api.make_request(
+                "PATCH",
+                https_url,
+                {"value": settings.firewall_settings.automatic_https_rewrites}
+            )
+            if result.get('success'):
+                updated_settings["automatic_https_rewrites"] = result
+                logging.info(f"Successfully updated automatic https rewrites to {settings.firewall_settings.automatic_https_rewrites}")
+        except Exception as e:
+             logging.error(f"Failed to update automatic https rewrites: {e}")
+    
     return updated_settings
 
 
