@@ -262,15 +262,22 @@ def create_default_ruleset(api: CloudflareAPI, zone_id:str) -> Optional[str]:
             "action": "log"
         }
     try:
-        # Create a default rule in the phase to force creation of ruleset:
-        response = api.make_request("POST", f"{base_url}/phases/http_request_firewall_custom/rules", json_data=temp_rule)
+        # Get the Ruleset ID
+        ruleset_id = get_ruleset_id(api, zone_id)
+        if not ruleset_id:
+            logging.error(f"Failed to get ruleset ID in create_default_ruleset for zone {zone_id}")
+            return None
+
+        # Create a default rule in the ruleset to force its creation if it doesn't exist:
+        response = api.make_request("POST", f"{base_url}/{ruleset_id}/rules", json_data=temp_rule)
+
         if response.get("success"):
           # Now that the ruleset was created we need to delete the temporary rule
           rule_id = response.get("result").get("id")
-          delete_result = api.make_request("DELETE", f"{base_url}/phases/http_request_firewall_custom/rules/{rule_id}")
+          delete_result = api.make_request("DELETE", f"https://api.cloudflare.com/client/v4/zones/{zone_id}/rulesets/{ruleset_id}/rules/{rule_id}")
           if delete_result.get("success"):
             logging.info(f"Temporary rule deleted succesfully from zone: {zone_id}")
-            return get_ruleset_id(api,zone_id)
+            return ruleset_id
           else:
             logging.error(f"Error deleting temporary rule: {delete_result}")
             return None
