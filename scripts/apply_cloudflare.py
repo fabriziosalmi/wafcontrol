@@ -179,7 +179,12 @@ def apply_waf_settings(api: CloudflareAPI, zone_id: str, settings: WAFSettings) 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def apply_waf_rules(api: CloudflareAPI, zone_id: str, rules: List[WAFRule]) -> List[Dict[str, Any]]:
     logging.info(f"Applying WAF rules for zone {zone_id}...")
-    base_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/rulesets/phases/http_request_firewall_custom/rules"
+    ruleset_id = get_ruleset_id(api, zone_id)
+    if not ruleset_id:
+        logging.error(f"Failed to retrieve WAF ruleset id for zone {zone_id}")
+        return []
+    
+    base_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/rulesets/{ruleset_id}/rules"
     results = []
 
     for rule in rules:
@@ -225,6 +230,26 @@ def apply_waf_rules(api: CloudflareAPI, zone_id: str, rules: List[WAFRule]) -> L
             logging.error(f"Failed to create/update rule {rule.description}: {e}")
             results.append({"success": False, "errors": [{"message": str(e)}]})
     return results
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def get_ruleset_id(api: CloudflareAPI, zone_id: str) -> Optional[str]:
+    base_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/rulesets"
+    try:
+        response = api.make_request("GET", base_url)
+        if response.get("success"):
+             rulesets = response.get("result", [])
+             for ruleset in rulesets:
+                 if ruleset.get("phase") == "http_request_firewall_custom":
+                     return ruleset.get("id")
+        else:
+            logging.error(f"Error fetching rulesets: {response}")
+            return None
+    except Exception as e:
+        logging.error(f"Error getting ruleset id {e}")
+        return None
+    return None
+
+
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def find_existing_rule_id(api: CloudflareAPI, base_url:str, description: str) -> Optional[str]:
