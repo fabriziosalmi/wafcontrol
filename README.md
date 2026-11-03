@@ -17,7 +17,7 @@ A `default` section in the config applies to all zones. Settings in a zone's own
 
 ## Prerequisites
 
-- Python 3.9 or higher
+- Python 3.10 or higher
 - A Cloudflare API token with **Zone Settings: Edit** permission
 - A GitHub repository secret named `CLOUDFLARE_API_TOKEN`
 
